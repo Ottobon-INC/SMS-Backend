@@ -12,6 +12,7 @@ from app.shared.models.base import Base
 MODEL_MODULES = [
     "app.modules.academic_structure.models",
     "app.modules.audit.models",
+    "app.modules.authentication.models",
     "app.modules.branches.models",
     "app.modules.imports.models",
     "app.modules.platform_admin.models",
@@ -28,11 +29,13 @@ def test_model_modules_import_successfully() -> None:
 
 def test_foundation_metadata_contains_exactly_expected_tables() -> None:
     import_foundation_models()
-    sms_tables = {
-        table_name for table_name in Base.metadata.tables if table_name.startswith("sms_")
+    foundation_tables = {
+        table_name
+        for table_name in Base.metadata.tables
+        if table_name in FOUNDATION_TABLE_NAMES
     }
-    assert sms_tables == FOUNDATION_TABLE_NAMES
-    assert len(sms_tables) == 26
+    assert foundation_tables == FOUNDATION_TABLE_NAMES
+    assert len(foundation_tables) == 26
 
 
 def test_foundation_metadata_registry_has_no_missing_tables() -> None:

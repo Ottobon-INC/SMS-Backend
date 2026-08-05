@@ -126,3 +126,48 @@ Alembic migrations live only under `migrations/`. Do not create frontend databas
 - Bhanu and Sampath must use the locked foundation models.
 - Module-owned tables may be added later only through reviewed SQL and matching SQLAlchemy models.
 - No one may duplicate tenant, user, branch, student, guardian, or enrolment tables.
+
+## Authentication Foundation
+
+The backend owns application login and protected API authorization. The frontend submits username/email and password to FastAPI; FastAPI must verify credentials against an approved backend-only credential store, issue an application access token, and resolve `sms_users`, access assignments, permissions, and enabled modules.
+
+The current locked 26-table foundation does not include password-hash credential storage. Therefore `/api/v1/auth/login` fails closed until `sms_user_credentials` is added manually through reviewed SQL and matching SQLAlchemy models.
+
+Password hashing uses backend-only PBKDF2-HMAC-SHA256 helpers in `app/core/security/passwords.py`. Generate a hash for manual SQL with:
+
+```powershell
+.\.venv\Scripts\python.exe -m app.scripts.hash_password
+```
+
+The signup option is request-based. It does not create users or roles automatically. `/api/v1/auth/signup-request` fails closed until `sms_signup_requests` is added manually.
+
+Required local values:
+
+```env
+APP_AUTH_SECRET=
+APP_AUTH_ISSUER=student-management-backend
+APP_AUTH_AUDIENCE=student-management-frontend
+ACCESS_TOKEN_EXPIRE_MINUTES=60
+PASSWORD_HASH_ITERATIONS=390000
+PASSWORD_PEPPER=
+FRONTEND_ORIGIN=http://localhost:5173
+```
+
+Protected frontend requests send:
+
+```text
+Authorization: Bearer <application-access-token>
+X-Access-Assignment-ID: <sms_user_access_assignments.id>
+```
+
+Authentication endpoints:
+
+```text
+POST /api/v1/auth/login
+POST /api/v1/auth/signup-request
+GET  /api/v1/auth/me
+GET  /api/v1/auth/contexts
+POST /api/v1/auth/select-context
+```
+
+Future modules must use the shared request-context dependencies in `app/core/security/dependencies.py` instead of implementing their own tenant, branch, permission, or parent-link checks.

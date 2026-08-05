@@ -37,6 +37,13 @@ class Settings(BaseSettings):
     api_v1_prefix: str = "/api/v1"
     database_url: str = ""
     supabase_url: str = "http://localhost:54321"
+    app_auth_secret: str = ""
+    app_auth_issuer: str = "student-management-backend"
+    app_auth_audience: str = "student-management-frontend"
+    access_token_expire_minutes: int = 60
+    password_hash_iterations: int = 390000
+    password_pepper: str = ""
+    frontend_origin: str = "http://localhost:5173"
     redis_url: str = "redis://localhost:6379/0"
     sentry_dsn: str | None = None
 
