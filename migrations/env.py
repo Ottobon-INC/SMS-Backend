@@ -25,8 +25,10 @@ def include_object(object_, name, type_, reflected, compare_to):  # type: ignore
     return True
 
 
+from app.core.config.settings import settings
+
 def run_migrations_offline() -> None:
-    url = config.get_main_option("sqlalchemy.url")
+    url = settings.normalized_database_url()
     context.configure(
         url=url,
         target_metadata=target_metadata,
@@ -38,8 +40,10 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
+    configuration = config.get_section(config.config_ini_section, {}) or {}
+    configuration["sqlalchemy.url"] = settings.normalized_database_url()
     connectable = engine_from_config(
-        config.get_section(config.config_ini_section, {}),
+        configuration,
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )
