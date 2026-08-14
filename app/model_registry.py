@@ -29,6 +29,9 @@ FOUNDATION_TABLE_NAMES = {
     "sms_import_rows",
     "sms_workflow_requests",
     "sms_audit_events",
+    "sms_exams",
+    "sms_exam_subjects",
+    "sms_student_exam_records",
 }
 
 
@@ -38,6 +41,7 @@ def import_foundation_models() -> None:
     import app.modules.academic_structure.models  # noqa: F401
     import app.modules.audit.models  # noqa: F401
     import app.modules.branches.models  # noqa: F401
+    import app.modules.examinations.models  # noqa: F401
     import app.modules.imports.models  # noqa: F401
     import app.modules.platform_admin.models  # noqa: F401
     import app.modules.students.models  # noqa: F401
