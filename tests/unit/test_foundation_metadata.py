@@ -14,6 +14,7 @@ MODEL_MODULES = [
     "app.modules.audit.models",
     "app.modules.authentication.models",
     "app.modules.branches.models",
+    "app.modules.examinations.models",
     "app.modules.imports.models",
     "app.modules.platform_admin.models",
     "app.modules.students.models",

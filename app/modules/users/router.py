@@ -4,6 +4,7 @@
 
 Responsibilities for this layer are documented in the architecture docs.
 """
+
 import uuid as _uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -16,7 +17,7 @@ router = APIRouter(prefix="/users", tags=["users"])
 
 DEFAULT_TENANT_ID = "e0bb112a-1da7-44e2-8988-a90dc7b5cca5"
 DEFAULT_BRANCH_ID = "8854ab2a-44cf-4770-bb51-5f78e0876e9d"
-DEFAULT_CREATED_BY = "842021d3-9826-4c4f-ad83-504be45d4520"
+DEFAULT_ASSIGNED_BY = "842021d3-9826-4c4f-ad83-504be45d4520"
 
 
 @router.get("")
@@ -63,9 +64,33 @@ def get_users(db: Session = Depends(get_db_session)):
     rows = db.execute(query).fetchall()
     if not rows:
         return [
-          {"id": "usr-101", "name": "Pramod Dean", "email": "dean@svic.edu", "mobile": "+91 98765 00001", "role": "INSTITUTION_ADMIN", "branch": "All Campuses", "status": "ACTIVE"},
-          {"id": "usr-102", "name": "Dr. K. V. Rao", "email": "principal.hyd@svic.edu", "mobile": "+91 98765 00002", "role": "BRANCH_ADMIN", "branch": "Hyderabad Main Campus", "status": "ACTIVE"},
-          {"id": "usr-103", "name": "Sita Lakshmi", "email": "maths.teacher@svic.edu", "mobile": "+91 98765 00003", "role": "OFFICE_STAFF", "branch": "Hyderabad Main Campus", "status": "ACTIVE"},
+            {
+                "id": "usr-101",
+                "name": "Pramod Dean",
+                "email": "dean@svic.edu",
+                "mobile": "+91 98765 00001",
+                "role": "INSTITUTION_ADMIN",
+                "branch": "All Campuses",
+                "status": "ACTIVE",
+            },
+            {
+                "id": "usr-102",
+                "name": "Dr. K. V. Rao",
+                "email": "principal.hyd@svic.edu",
+                "mobile": "+91 98765 00002",
+                "role": "BRANCH_ADMIN",
+                "branch": "Hyderabad Main Campus",
+                "status": "ACTIVE",
+            },
+            {
+                "id": "usr-103",
+                "name": "Sita Lakshmi",
+                "email": "office.staff@svic.edu",
+                "mobile": "+91 98765 00003",
+                "role": "OFFICE_STAFF",
+                "branch": "Hyderabad Main Campus",
+                "status": "ACTIVE",
+            },
         ]
     return [
         {
@@ -96,55 +121,57 @@ def create_user(payload: dict, db: Session = Depends(get_db_session)):
     email = payload.get("email") or f"user.{_uuid.uuid4().hex[:4]}@svic.edu"
     mobile = payload.get("mobile") or "+91 98765 43210"
 
-    # 1. Insert the user into sms_users with correct tenant
     user_query = text("""
         INSERT INTO sms_users (id, tenant_id, account_category, full_name, email, mobile, status, created_at, updated_at)
         VALUES (:id, :tenant_id, 'TENANT', :full_name, :email, :mobile, 'ACTIVE', NOW(), NOW())
         ON CONFLICT (email) DO UPDATE SET full_name = EXCLUDED.full_name, updated_at = NOW()
         RETURNING id, full_name, email, mobile, status
     """)
-    res = db.execute(user_query, {
-        "id": user_id,
-        "tenant_id": DEFAULT_TENANT_ID,
-        "full_name": full_name,
-        "email": email,
-        "mobile": mobile,
-    }).fetchone()
+    res = db.execute(
+        user_query,
+        {
+            "id": user_id,
+            "tenant_id": DEFAULT_TENANT_ID,
+            "full_name": full_name,
+            "email": email,
+            "mobile": mobile,
+        },
+    ).fetchone()
 
-    # 2. Determine scope and branch for the role
     is_branch_scoped = target_role in ("BRANCH_ADMIN", "OFFICE_STAFF")
     branch_id = payload.get("branch_id") or (DEFAULT_BRANCH_ID if is_branch_scoped else None)
     scope_type = "BRANCH" if is_branch_scoped else "TENANT"
 
-    # 3. Look up the role_id from sms_roles
     role_lookup = db.execute(
         text("SELECT id FROM sms_roles WHERE role_code = :role_code LIMIT 1"),
         {"role_code": target_role},
     ).fetchone()
     role_id = str(role_lookup.id) if role_lookup else None
 
-    # 4. Insert access assignment so the user has a real role in the DB
     if role_id:
         assignment_query = text("""
             INSERT INTO sms_user_access_assignments (
                 id, tenant_id, user_id, role_id, branch_id, scope_type,
-                is_primary, status, valid_from, created_by, created_at, updated_at
+                is_primary, status, valid_from, assigned_by, created_at, updated_at
             )
             VALUES (
                 :id, :tenant_id, :user_id, :role_id, :branch_id, :scope_type,
-                true, 'ACTIVE', NOW(), :created_by, NOW(), NOW()
+                true, 'ACTIVE', NOW(), :assigned_by, NOW(), NOW()
             )
             ON CONFLICT DO NOTHING
         """)
-        db.execute(assignment_query, {
-            "id": str(_uuid.uuid4()),
-            "tenant_id": DEFAULT_TENANT_ID,
-            "user_id": str(res.id),
-            "role_id": role_id,
-            "branch_id": branch_id,
-            "scope_type": scope_type,
-            "created_by": DEFAULT_CREATED_BY,
-        })
+        db.execute(
+            assignment_query,
+            {
+                "id": str(_uuid.uuid4()),
+                "tenant_id": DEFAULT_TENANT_ID,
+                "user_id": str(res.id),
+                "role_id": role_id,
+                "branch_id": branch_id,
+                "scope_type": scope_type,
+                "assigned_by": DEFAULT_ASSIGNED_BY,
+            },
+        )
 
     db.commit()
 
