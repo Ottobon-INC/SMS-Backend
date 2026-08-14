@@ -1,8 +1,12 @@
 """Import foundation SQLAlchemy models."""
 
 # mypy: ignore-errors
+import datetime
+import uuid
+from typing import Any
 
 from sqlalchemy import CheckConstraint, ForeignKeyConstraint, Index, Table, UniqueConstraint, text
+from sqlalchemy.orm import Mapped
 
 from app.shared.models.base import Base
 from app.shared.models.foundation_columns import (
@@ -19,6 +23,14 @@ from app.shared.models.foundation_columns import (
 
 class ImportBatch(Base):
     """sms_import_batches table mapping."""
+    __allow_unmapped__ = True
+
+    id: Any
+    tenant_id: Any
+    branch_id: Any
+    status: Any
+    summary: Any
+    committed_at: Any
 
     __table__ = Table(
         "sms_import_batches",
@@ -60,6 +72,17 @@ class ImportBatch(Base):
 
 class ImportRow(Base):
     """sms_import_rows table mapping."""
+    __allow_unmapped__ = True
+
+    id: Any
+    batch_id: Any
+    row_number: Any
+    raw_data: Any
+    normalized_data: Any
+    validation_status: Any
+    errors: Any
+    target_entity_type: Any
+    target_entity_id: Any
 
     __table__ = Table(
         "sms_import_rows",
@@ -67,7 +90,7 @@ class ImportRow(Base):
         uuid_pk(),
         uuid_col("batch_id", nullable=False),
         int_col("row_number", nullable=False),
-        jsonb("raw_data", default=None),
+        jsonb("raw_data"),
         jsonb("normalized_data"),
         text_col("validation_status", nullable=False),
         jsonb("errors", default="'[]'::jsonb"),

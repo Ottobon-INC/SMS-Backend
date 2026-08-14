@@ -1,4 +1,8 @@
-"""imports module permissions placeholder.
+"""Permissions for the imports module."""
 
-Responsibilities for this layer are documented in the architecture docs.
-"""
+IMPORT_UPLOAD = "import.upload"
+IMPORT_VALIDATE = "import.validate"
+IMPORT_SUBMIT = "import.submit"
+IMPORT_COMMIT = "import.commit"
+IMPORT_VIEW_PREVIEW = "import.view_preview"
+IMPORT_APPROVE = "import.approve"

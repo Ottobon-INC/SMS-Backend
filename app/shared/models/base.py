@@ -15,4 +15,5 @@ NAMING_CONVENTION = {
 class Base(DeclarativeBase):
     """Declarative base for module-owned SQLAlchemy models."""
 
+    __allow_unmapped__ = True
     metadata = MetaData(naming_convention=NAMING_CONVENTION)
