@@ -1,9 +1,7 @@
-<<<<<<< Updated upstream
-"""academic structure module router placeholder.
+"""Academic structure module router.
 
 Responsibilities for this layer are documented in the architecture docs.
 """
-=======
 import json
 import uuid
 from uuid import UUID
@@ -199,4 +197,3 @@ def create_programme(payload: dict, db: Session = Depends(get_db_session)):
         "yearLevel": res.year_level,
         "subjectIds": res.subject_ids or [],
     }
->>>>>>> Stashed changes

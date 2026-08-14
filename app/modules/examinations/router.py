@@ -1,9 +1,7 @@
-"""examinations module router placeholder.
+"""Examinations module router.
 
-<<<<<<< Updated upstream
 Responsibilities for this layer are documented in the architecture docs.
 """
-=======
 from typing import List, Optional
 from uuid import UUID
 
@@ -152,4 +150,3 @@ def bulk_save_student_exam_records(
         user_id=user_id,
         records=payload.records,
     )
->>>>>>> Stashed changes
