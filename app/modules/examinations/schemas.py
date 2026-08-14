@@ -1,10 +1,10 @@
+# ruff: noqa: B008, E501
 """Examinations module Pydantic schemas."""
 
 from datetime import date, datetime
-from typing import Any, Dict, List, Optional
 from uuid import UUID
-from pydantic import BaseModel, Field
 
+from pydantic import BaseModel, Field
 
 # --- ExamSubject Schemas ---
 
@@ -36,48 +36,48 @@ class ExamBase(BaseModel):
     name: str = Field(min_length=1, max_length=150)
     type: str = Field(min_length=1, max_length=50)
     scope: str = Field(default="SINGLE_BRANCH")  # SINGLE_BRANCH, ALL_BRANCHES, SELECTED_BRANCHES
-    branch_id: Optional[UUID] = None
-    branch_ids: Optional[List[str]] = None
-    excluded_branch_ids: Optional[List[str]] = None
-    exemption_reasons: Optional[Dict[str, str]] = None
+    branch_id: UUID | None = None
+    branch_ids: list[str] | None = None
+    excluded_branch_ids: list[str] | None = None
+    exemption_reasons: dict[str, str] | None = None
     academic_year_id: UUID
     programme_id: UUID
-    programme_ids: Optional[List[str]] = None
+    programme_ids: list[str] | None = None
     exam_date: date
-    marks_entry_deadline: Optional[date] = None
+    marks_entry_deadline: date | None = None
 
 
 class ExamCreate(ExamBase):
-    exam_subjects: Optional[List[ExamSubjectCreate]] = None
+    exam_subjects: list[ExamSubjectCreate] | None = None
 
 
 class ExamUpdate(BaseModel):
-    name: Optional[str] = None
-    type: Optional[str] = None
-    scope: Optional[str] = None
-    branch_id: Optional[UUID] = None
-    branch_ids: Optional[List[str]] = None
-    excluded_branch_ids: Optional[List[str]] = None
-    exemption_reasons: Optional[Dict[str, str]] = None
-    programme_ids: Optional[List[str]] = None
-    exam_date: Optional[date] = None
-    marks_entry_deadline: Optional[date] = None
-    status: Optional[str] = None
-    return_reason: Optional[str] = None
+    name: str | None = None
+    type: str | None = None
+    scope: str | None = None
+    branch_id: UUID | None = None
+    branch_ids: list[str] | None = None
+    excluded_branch_ids: list[str] | None = None
+    exemption_reasons: dict[str, str] | None = None
+    programme_ids: list[str] | None = None
+    exam_date: date | None = None
+    marks_entry_deadline: date | None = None
+    status: str | None = None
+    return_reason: str | None = None
 
 
 class ExamRead(ExamBase):
     id: UUID
     tenant_id: UUID
     status: str
-    return_reason: Optional[str] = None
-    published_at: Optional[datetime] = None
-    published_by: Optional[UUID] = None
+    return_reason: str | None = None
+    published_at: datetime | None = None
+    published_by: UUID | None = None
     created_by: UUID
-    updated_by: Optional[UUID] = None
+    updated_by: UUID | None = None
     created_at: datetime
     updated_at: datetime
-    exam_subjects: List[ExamSubjectRead] = []
+    exam_subjects: list[ExamSubjectRead] = []
 
     class Config:
         from_attributes = True
@@ -87,16 +87,16 @@ class ExamRead(ExamBase):
 
 class ExamDateOverlapCheckRequest(BaseModel):
     exam_date: date
-    target_branch_ids: List[str]
+    target_branch_ids: list[str]
     programme_id: str
-    section_ids: Optional[List[str]] = None
-    exclude_exam_id: Optional[str] = None
+    section_ids: list[str] | None = None
+    exclude_exam_id: str | None = None
 
 
 class ExamDateOverlapCheckResponse(BaseModel):
     has_overlap: bool
-    conflicting_exam_id: Optional[str] = None
-    conflicting_exam_name: Optional[str] = None
+    conflicting_exam_id: str | None = None
+    conflicting_exam_name: str | None = None
 
 
 class BranchExemptionRequest(BaseModel):
@@ -114,12 +114,12 @@ class StudentExamRecordSave(BaseModel):
     enrollment_id: UUID
     student_id: UUID
     section_id: UUID
-    subject_marks: Dict[str, float]  # subject_id -> mark score (-1: ABSENT, -2: EXEMPTED, -3: MALPRACTICE)
-    status: Optional[str] = "DRAFT"
+    subject_marks: dict[str, float]  # subject_id -> mark score (-1: ABSENT, -2: EXEMPTED, -3: MALPRACTICE)
+    status: str | None = "DRAFT"
 
 
 class StudentExamRecordBulkSaveRequest(BaseModel):
-    records: List[StudentExamRecordSave]
+    records: list[StudentExamRecordSave]
 
 
 class StudentExamRecordRead(BaseModel):
@@ -129,7 +129,7 @@ class StudentExamRecordRead(BaseModel):
     enrollment_id: UUID
     student_id: UUID
     section_id: UUID
-    subject_marks: Dict[str, float]
+    subject_marks: dict[str, float]
     status: str
     entered_by: UUID
     created_at: datetime

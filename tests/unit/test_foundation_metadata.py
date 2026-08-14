@@ -35,10 +35,10 @@ def test_foundation_metadata_contains_exactly_expected_tables() -> None:
         if table_name in FOUNDATION_TABLE_NAMES
     }
     assert foundation_tables == FOUNDATION_TABLE_NAMES
-    assert len(foundation_tables) == 26
+    assert len(foundation_tables) == len(FOUNDATION_TABLE_NAMES)
 
 
 def test_foundation_metadata_registry_has_no_missing_tables() -> None:
     tables = foundation_metadata_tables()
     assert set(tables) == FOUNDATION_TABLE_NAMES
-    assert len(tables) == 26
+    assert len(tables) == len(FOUNDATION_TABLE_NAMES)

@@ -1,27 +1,28 @@
+
 from pydantic import BaseModel, Field
-from typing import Optional
+
 
 class StudentAddressSchema(BaseModel):
-    street: Optional[str] = None
-    city: Optional[str] = None
-    pincode: Optional[str] = None
+    street: str | None = None
+    city: str | None = None
+    pincode: str | None = None
 
 class GuardianDataSchema(BaseModel):
-    father_name: Optional[str] = None
-    mother_name: Optional[str] = None
-    guardian_phone: Optional[str] = None
-    guardian_email: Optional[str] = None
+    father_name: str | None = None
+    mother_name: str | None = None
+    guardian_phone: str | None = None
+    guardian_email: str | None = None
 
 class StudentCreatePayload(BaseModel):
     name: str = Field(..., description="Student full name")
-    admissionNumber: Optional[str] = None
-    gender: Optional[str] = "MALE"
-    date_of_birth: Optional[str] = None
-    blood_group: Optional[str] = None
-    stream: Optional[str] = "MPC"
-    section: Optional[str] = "Sec-A"
-    address: Optional[StudentAddressSchema] = None
-    guardian: Optional[GuardianDataSchema] = None
+    admissionNumber: str | None = None
+    gender: str | None = "MALE"
+    date_of_birth: str | None = None
+    blood_group: str | None = None
+    stream: str | None = "MPC"
+    section: str | None = "Sec-A"
+    address: StudentAddressSchema | None = None
+    guardian: GuardianDataSchema | None = None
 
 class StudentResponse(BaseModel):
     id: str
@@ -32,7 +33,7 @@ class StudentResponse(BaseModel):
     stream: str
     section: str
     status: str
-    father_name: Optional[str] = None
-    guardian_phone: Optional[str] = None
-    address_data: Optional[dict] = None
-    guardian_data: Optional[dict] = None
+    father_name: str | None = None
+    guardian_phone: str | None = None
+    address_data: dict[str, object] | None = None
+    guardian_data: dict[str, object] | None = None
