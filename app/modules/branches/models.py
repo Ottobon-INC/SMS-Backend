@@ -2,6 +2,8 @@
 
 # mypy: ignore-errors
 
+from typing import Any
+
 from sqlalchemy import CheckConstraint, ForeignKeyConstraint, Index, Table, UniqueConstraint
 
 from app.shared.models.base import Base
@@ -17,6 +19,12 @@ from app.shared.models.foundation_columns import (
 
 class Branch(Base):
     """sms_branches table mapping."""
+
+    id: Any
+    tenant_id: Any
+    branch_code: Any
+    display_name: Any
+    status: Any
 
     __table__ = Table(
         "sms_branches",

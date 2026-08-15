@@ -1,6 +1,7 @@
 """Student and family foundation SQLAlchemy models."""
 
 # mypy: ignore-errors
+from typing import Any
 
 from sqlalchemy import CheckConstraint, ForeignKeyConstraint, Index, Table, UniqueConstraint, text
 
@@ -19,6 +20,15 @@ from app.shared.models.foundation_columns import (
 
 class Student(Base):
     """sms_students table mapping."""
+
+    id: Any
+    tenant_id: Any
+    student_number: Any
+    legal_name: Any
+    display_name: Any
+    date_of_birth: Any
+    gender: Any
+    current_status: Any
 
     __table__ = Table(
         "sms_students",
@@ -87,6 +97,18 @@ class StudentAlias(Base):
 class Enrollment(Base):
     """sms_enrollments table mapping."""
 
+    id: Any
+    tenant_id: Any
+    student_id: Any
+    branch_id: Any
+    academic_year_id: Any
+    programme_id: Any
+    batch_id: Any
+    section_id: Any
+    admission_number: Any
+    status: Any
+    is_current: Any
+
     __table__ = Table(
         "sms_enrollments",
         Base.metadata,
@@ -138,6 +160,13 @@ class Enrollment(Base):
 class Guardian(Base):
     """sms_guardians table mapping."""
 
+    id: Any
+    tenant_id: Any
+    portal_user_id: Any
+    mobile: Any
+    email: Any
+    status: Any
+
     __table__ = Table(
         "sms_guardians",
         Base.metadata,
@@ -174,6 +203,13 @@ class Guardian(Base):
 
 class StudentGuardianLink(Base):
     """sms_student_guardian_links table mapping."""
+
+    id: Any
+    tenant_id: Any
+    student_id: Any
+    guardian_id: Any
+    relationship_type: Any
+    status: Any
 
     __table__ = Table(
         "sms_student_guardian_links",

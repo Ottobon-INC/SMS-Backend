@@ -1,5 +1,5 @@
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
-async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     import_foundation_models()
     try:
         check_database_connection()
@@ -42,3 +42,4 @@ app.add_middleware(
 app.middleware("http")(correlation_id_middleware)
 app.include_router(health_router)
 app.include_router(v1_router)
+

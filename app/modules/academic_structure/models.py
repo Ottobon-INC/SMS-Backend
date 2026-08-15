@@ -1,6 +1,7 @@
 """Academic foundation SQLAlchemy models."""
 
 # mypy: ignore-errors
+from typing import Any
 
 from sqlalchemy import CheckConstraint, ForeignKeyConstraint, Index, Table, UniqueConstraint, text
 
@@ -20,6 +21,15 @@ from app.shared.models.foundation_columns import (
 
 class AcademicYear(Base):
     """sms_academic_years table mapping."""
+
+    id: Any
+    tenant_id: Any
+    code: Any
+    name: Any
+    starts_on: Any
+    ends_on: Any
+    status: Any
+    is_default: Any
 
     __table__ = Table(
         "sms_academic_years",
@@ -52,6 +62,13 @@ class AcademicYear(Base):
 class AcademicProgramme(Base):
     """sms_academic_programmes table mapping."""
 
+    id: Any
+    tenant_id: Any
+    programme_code: Any
+    programme_name: Any
+    year_level: Any
+    status: Any
+
     __table__ = Table(
         "sms_academic_programmes",
         Base.metadata,
@@ -82,6 +99,16 @@ class AcademicProgramme(Base):
 
 class Batch(Base):
     """sms_batches table mapping."""
+
+    id: Any
+    tenant_id: Any
+    branch_id: Any
+    academic_year_id: Any
+    programme_id: Any
+    batch_code: Any
+    batch_name: Any
+    year_level: Any
+    status: Any
 
     __table__ = Table(
         "sms_batches",
@@ -115,6 +142,14 @@ class Batch(Base):
 
 class Section(Base):
     """sms_sections table mapping."""
+
+    id: Any
+    tenant_id: Any
+    branch_id: Any
+    batch_id: Any
+    section_code: Any
+    section_name: Any
+    status: Any
 
     __table__ = Table(
         "sms_sections",
