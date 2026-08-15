@@ -59,7 +59,7 @@ def get_students(branch_id: str | None = None, db: Session = Depends(get_db_sess
         WHERE
             s.tenant_id = :tenant_id
             AND s.current_status = 'ACTIVE'
-            AND (:branch_id IS NULL OR e.branch_id = CAST(:branch_id AS uuid))
+            AND (CAST(:branch_id AS uuid) IS NULL OR e.branch_id = CAST(:branch_id AS uuid))
         ORDER BY s.created_at DESC
     """)
     rows = db.execute(query, {"tenant_id": DEFAULT_TENANT_ID, "branch_id": branch_id}).fetchall()
