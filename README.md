@@ -171,3 +171,26 @@ POST /api/v1/auth/select-context
 ```
 
 Future modules must use the shared request-context dependencies in `app/core/security/dependencies.py` instead of implementing their own tenant, branch, permission, or parent-link checks.
+
+## Fee Module Checkpoint
+
+The Fee module currently has three manually created PostgreSQL tables mapped in `app/modules/fees/models.py`:
+
+- `sms_fee_accounts`
+- `sms_fee_ledger_entries`
+- `sms_fee_adjustment_requests`
+
+The backend registers these models through `app/model_registry.py` and exposes a read-only endpoint:
+
+```text
+GET /api/v1/fees/accounts
+```
+
+Fee account setup endpoints:
+
+```text
+GET  /api/v1/fees/setup-options
+POST /api/v1/fees/accounts
+```
+
+Listing requires `fee.view`. Initial account setup requires `fee.basic_assign` and applies tenant and branch scope from the shared request context. Payment receipts, later scholarships/concessions, reversals and adjustment approvals are not implemented yet.

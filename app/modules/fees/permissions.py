@@ -1,4 +1,13 @@
-"""fees module permissions placeholder.
+"""Permission keys used by the fee module."""
 
-Responsibilities for this layer are documented in the architecture docs.
-"""
+FEE_VIEW = "fee.view"
+FEE_BASIC_ASSIGN = "fee.basic_assign"
+FEE_PAYMENT_RECORD = "fee.payment_record"
+FEE_PAYMENT_REVERSE = "fee.payment_reverse"
+FEE_ADJUSTMENT_VIEW = "fee.adjustment_view"
+FEE_ADJUSTMENT_CREATE = "fee.adjustment_create"
+FEE_ADJUSTMENT_FINALIZE_WITHIN_LIMIT = "fee.adjustment_finalize_within_limit"
+FEE_ADJUSTMENT_APPROVE_ABOVE_LIMIT = "fee.adjustment_approve_above_limit"
+FEE_ADJUSTMENT_REJECT = "fee.adjustment_reject"
+FEE_ADJUSTMENT_LOG_VIEW = "fee.adjustment_log_view"
+FEE_EXPORT = "fee.export"

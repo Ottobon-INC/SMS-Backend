@@ -229,6 +229,64 @@ class ImportRepository:
         ).order_by(Section.section_name)
         return self.session.scalars(stmt).all()
 
+    def find_fee_import_enrollments(
+        self,
+        *,
+        tenant_id: UUID,
+        branch_id: UUID | None,
+        admission_number: str,
+        academic_year: str,
+    ) -> list[dict[str, Any]]:
+        rows = self.session.execute(
+            text("""
+                SELECT
+                    e.id AS enrollment_id,
+                    e.student_id,
+                    e.branch_id,
+                    e.academic_year_id,
+                    e.admission_number,
+                    s.legal_name,
+                    s.display_name,
+                    ay.name AS academic_year,
+                    ap.programme_name,
+                    sec.section_name,
+                    fa.id AS fee_account_id
+                FROM sms_enrollments e
+                JOIN sms_students s
+                    ON s.tenant_id = e.tenant_id
+                    AND s.id = e.student_id
+                JOIN sms_academic_years ay
+                    ON ay.tenant_id = e.tenant_id
+                    AND ay.id = e.academic_year_id
+                LEFT JOIN sms_academic_programmes ap
+                    ON ap.tenant_id = e.tenant_id
+                    AND ap.id = e.programme_id
+                LEFT JOIN sms_sections sec
+                    ON sec.tenant_id = e.tenant_id
+                    AND sec.branch_id = e.branch_id
+                    AND sec.batch_id = e.batch_id
+                    AND sec.id = e.section_id
+                LEFT JOIN sms_fee_accounts fa
+                    ON fa.tenant_id = e.tenant_id
+                    AND fa.enrollment_id = e.id
+                WHERE e.tenant_id = :tenant_id
+                    AND lower(e.admission_number) = lower(:admission_number)
+                    AND (lower(ay.name) = lower(:academic_year) OR lower(ay.code) = lower(:academic_year))
+                    AND e.status = 'ACTIVE'
+                    AND e.is_current = true
+                    AND s.current_status = 'ACTIVE'
+                    AND (CAST(:branch_id AS uuid) IS NULL OR e.branch_id = CAST(:branch_id AS uuid))
+                ORDER BY e.created_at DESC
+            """),
+            {
+                "tenant_id": tenant_id,
+                "branch_id": str(branch_id) if branch_id else None,
+                "admission_number": admission_number,
+                "academic_year": academic_year,
+            },
+        ).mappings().all()
+        return [dict(row) for row in rows]
+
     def get_guardian_with_links(self, guardian_id: UUID, tenant_id: UUID) -> Guardian | None:
         """Fetch a guardian and ensure they belong to the tenant and have active student links."""
         stmt = select(Guardian).where(

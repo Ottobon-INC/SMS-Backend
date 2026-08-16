@@ -31,6 +31,7 @@ from app.modules.imports.schemas import (
 from app.modules.imports.service import ImportService
 
 router = APIRouter(prefix="/imports/students", tags=["Imports"])
+fee_router = APIRouter(prefix="/imports/fees", tags=["Imports"])
 
 
 def get_import_service(session: Session = Depends(get_db_session)) -> ImportService:
@@ -49,6 +50,81 @@ def download_student_import_template(
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": 'attachment; filename="student_import_template.xlsx"'},
     )
+
+
+@fee_router.get("/template")
+def download_fee_import_template(
+    context: RequestContext = Depends(require_permission(IMPORT_UPLOAD)),
+    service: ImportService = Depends(get_import_service),
+):
+    assert context.tenant_id is not None
+    content = service.generate_fee_import_template(context.tenant_id, context.branch_id)
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="fee_import_template.xlsx"'},
+    )
+
+
+@fee_router.post("/upload", response_model=UploadResponse, status_code=status.HTTP_201_CREATED)
+def upload_fee_accounts(
+    file: UploadFile = File(...),
+    branch_id: UUID | None = Form(None),
+    context: RequestContext = Depends(require_permission(IMPORT_UPLOAD)),
+    service: ImportService = Depends(get_import_service),
+):
+    assert context.tenant_id is not None
+    if context.branch_id is not None and branch_id is not None and context.branch_id != branch_id:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized for this branch.")
+
+    content = file.file.read()
+    return service.upload_fee_excel(
+        tenant_id=context.tenant_id,
+        branch_id=branch_id,
+        app_user_id=context.app_user_id,
+        file_content=content,
+        filename=file.filename or "fee_import.xlsx",
+        context_branch_id=context.branch_id,
+    )
+
+
+@fee_router.get("/batches/{batch_id}/preview", response_model=PreviewResponse)
+def get_fee_batch_preview(
+    batch_id: UUID,
+    context: RequestContext = Depends(require_permission(IMPORT_VIEW_PREVIEW)),
+    service: ImportService = Depends(get_import_service),
+):
+    assert context.tenant_id is not None
+    return service.get_import_preview(batch_id, context.tenant_id, context.branch_id, expected_module_code="fees")
+
+
+@fee_router.patch("/batches/{batch_id}/rows/{row_id}", response_model=PreviewResponse)
+def correct_fee_batch_row(
+    batch_id: UUID,
+    row_id: UUID,
+    payload: ImportRowCorrectionRequest,
+    context: RequestContext = Depends(require_permission(IMPORT_UPLOAD)),
+    service: ImportService = Depends(get_import_service),
+):
+    assert context.tenant_id is not None
+    return service.correct_fee_import_row(
+        batch_id=batch_id,
+        row_id=row_id,
+        tenant_id=context.tenant_id,
+        raw_data=payload.raw_data,
+        context_branch_id=context.branch_id,
+    )
+
+
+@fee_router.post("/batches/{batch_id}/commit")
+def commit_fee_import(
+    batch_id: UUID,
+    context: RequestContext = Depends(require_permission(IMPORT_COMMIT)),
+    service: ImportService = Depends(get_import_service),
+):
+    assert context.tenant_id is not None
+    return service.commit_fee_import(batch_id, context.tenant_id, context.app_user_id, context.branch_id)
 
 
 @router.post("/upload", response_model=UploadResponse, status_code=status.HTTP_201_CREATED)
@@ -83,7 +159,7 @@ def get_batch_preview(
     service: ImportService = Depends(get_import_service),
 ):
     assert context.tenant_id is not None
-    return service.get_import_preview(batch_id, context.tenant_id, context.branch_id)
+    return service.get_import_preview(batch_id, context.tenant_id, context.branch_id, expected_module_code="students")
 
 
 @router.patch("/batches/{batch_id}/rows/{row_id}", response_model=PreviewResponse)
