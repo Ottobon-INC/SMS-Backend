@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.modules.academic_structure.models import AcademicProgramme, AcademicYear, Batch, Section
@@ -23,6 +23,13 @@ class ImportRepository:
 
     def get_batch(self, batch_id: UUID) -> ImportBatch | None:
         return self.session.get(ImportBatch, batch_id)
+
+    def get_batch_by_idempotency_key(self, tenant_id: UUID, idempotency_key: str) -> ImportBatch | None:
+        stmt = select(ImportBatch).where(
+            ImportBatch.tenant_id == tenant_id,
+            ImportBatch.idempotency_key == idempotency_key,
+        )
+        return self.session.scalars(stmt).first()
 
     def update_batch(self, batch: ImportBatch) -> ImportBatch:
         self.session.add(batch)
@@ -81,6 +88,47 @@ class ImportRepository:
         )
         return self.session.scalars(stmt).first()
 
+    def resolve_section_placement(
+        self,
+        tenant_id: UUID,
+        branch_id: UUID,
+        academic_year_id: UUID,
+        programme_id: UUID,
+        section_name_or_code: str,
+    ) -> Any | None:
+        return self.session.execute(
+            text("""
+                SELECT
+                    s.id AS section_id,
+                    bt.id AS batch_id,
+                    bt.year_level
+                FROM sms_sections s
+                JOIN sms_batches bt
+                    ON bt.tenant_id = s.tenant_id
+                    AND bt.branch_id = s.branch_id
+                    AND bt.id = s.batch_id
+                WHERE s.tenant_id = :tenant_id
+                    AND s.branch_id = :branch_id
+                    AND bt.academic_year_id = :academic_year_id
+                    AND bt.programme_id = :programme_id
+                    AND s.status = 'ACTIVE'
+                    AND bt.status = 'ACTIVE'
+                    AND (
+                        lower(s.section_name) = lower(:section_value)
+                        OR lower(s.section_code) = lower(:section_value)
+                    )
+                ORDER BY s.section_name
+                LIMIT 1
+            """),
+            {
+                "tenant_id": tenant_id,
+                "branch_id": branch_id,
+                "academic_year_id": academic_year_id,
+                "programme_id": programme_id,
+                "section_value": section_name_or_code,
+            },
+        ).fetchone()
+
     def check_student_number_exists(self, tenant_id: UUID, student_number: str) -> bool:
         stmt = select(Student.id).where(
             Student.tenant_id == tenant_id,
@@ -102,6 +150,48 @@ class ImportRepository:
             Enrollment.admission_number == admission_number
         )
         return self.session.scalars(stmt).first() is not None
+
+    def check_roll_number_exists(self, tenant_id: UUID, branch_id: UUID, academic_year_id: UUID, roll_number: str) -> bool:
+        stmt = select(Enrollment.id).where(
+            Enrollment.tenant_id == tenant_id,
+            Enrollment.branch_id == branch_id,
+            Enrollment.academic_year_id == academic_year_id,
+            Enrollment.roll_number == roll_number
+        )
+        return self.session.scalars(stmt).first() is not None
+
+    def possible_student_match_exists(
+        self,
+        tenant_id: UUID,
+        student_name: str,
+        date_of_birth: str,
+        guardian_mobile: str,
+    ) -> bool:
+        row = self.session.execute(
+            text("""
+                SELECT 1
+                FROM sms_students s
+                JOIN sms_student_guardian_links sgl
+                    ON sgl.tenant_id = s.tenant_id
+                    AND sgl.student_id = s.id
+                    AND sgl.status = 'ACTIVE'
+                JOIN sms_guardians g
+                    ON g.tenant_id = sgl.tenant_id
+                    AND g.id = sgl.guardian_id
+                WHERE s.tenant_id = :tenant_id
+                    AND lower(s.legal_name) = lower(:student_name)
+                    AND s.date_of_birth = CAST(:date_of_birth AS date)
+                    AND g.mobile = :guardian_mobile
+                LIMIT 1
+            """),
+            {
+                "tenant_id": tenant_id,
+                "student_name": student_name,
+                "date_of_birth": date_of_birth,
+                "guardian_mobile": guardian_mobile,
+            },
+        ).first()
+        return row is not None
 
     def get_academic_years(self, tenant_id: UUID) -> Sequence[AcademicYear]:
         stmt = select(AcademicYear).where(

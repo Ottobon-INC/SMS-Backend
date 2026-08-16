@@ -4,6 +4,7 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, UploadFile, status
+from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -19,6 +20,7 @@ from app.modules.imports.schemas import (
     BulkActivateEligibilityResponse,
     BulkActivateSectionRequest,
     BulkActivateSectionResponse,
+    ImportRowCorrectionRequest,
     ManualAddStudentRequest,
     ManualAddStudentResponse,
     PreviewResponse,
@@ -33,6 +35,20 @@ router = APIRouter(prefix="/imports/students", tags=["Imports"])
 
 def get_import_service(session: Session = Depends(get_db_session)) -> ImportService:
     return ImportService(ImportRepository(session), session)
+
+
+@router.get("/template")
+def download_student_import_template(
+    context: RequestContext = Depends(require_permission(IMPORT_UPLOAD)),
+    service: ImportService = Depends(get_import_service),
+):
+    assert context.tenant_id is not None
+    content = service.generate_student_import_template(context.tenant_id, context.branch_id)
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="student_import_template.xlsx"'},
+    )
 
 
 @router.post("/upload", response_model=UploadResponse, status_code=status.HTTP_201_CREATED)
@@ -68,6 +84,24 @@ def get_batch_preview(
 ):
     assert context.tenant_id is not None
     return service.get_import_preview(batch_id, context.tenant_id, context.branch_id)
+
+
+@router.patch("/batches/{batch_id}/rows/{row_id}", response_model=PreviewResponse)
+def correct_batch_row(
+    batch_id: UUID,
+    row_id: UUID,
+    payload: ImportRowCorrectionRequest,
+    context: RequestContext = Depends(require_permission(IMPORT_UPLOAD)),
+    service: ImportService = Depends(get_import_service),
+):
+    assert context.tenant_id is not None
+    return service.correct_import_row(
+        batch_id=batch_id,
+        row_id=row_id,
+        tenant_id=context.tenant_id,
+        raw_data=payload.raw_data,
+        context_branch_id=context.branch_id,
+    )
 
 
 @router.post("/batches/{batch_id}/commit")

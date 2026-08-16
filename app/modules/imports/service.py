@@ -3,10 +3,16 @@
 import hashlib
 import uuid
 from datetime import UTC, datetime
+from io import BytesIO
 from typing import Any
 from uuid import UUID
 
 from fastapi import HTTPException, status
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.datavalidation import DataValidation
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.modules.imports.models import ImportBatch, ImportRow
@@ -35,6 +41,17 @@ class ImportService:
         self, tenant_id: UUID, branch_id: UUID | None, app_user_id: UUID, file_content: bytes, filename: str, context_branch_id: UUID | None = None
     ) -> UploadResponse:
         file_hash = hashlib.sha256(file_content).hexdigest()
+        idempotency_key = f"{tenant_id}-{file_hash}"
+
+        existing_batch = self.repository.get_batch_by_idempotency_key(tenant_id, idempotency_key)
+        if existing_batch is not None:
+            if context_branch_id and existing_batch.branch_id and existing_batch.branch_id != context_branch_id:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized for this batch.")
+            return UploadResponse(
+                message="This file was already uploaded. Opening the existing validation preview.",
+                batch_id=existing_batch.id,
+                status=existing_batch.status,
+            )
         
         batch = ImportBatch(
             id=uuid.uuid4(),
@@ -46,13 +63,14 @@ class ImportService:
             source_filename=filename,
             storage_key=f"imports/students/{file_hash}.xlsx",
             checksum=file_hash,
-            idempotency_key=f"{tenant_id}-{file_hash}",
+            idempotency_key=idempotency_key,
             status="UPLOADED",
             created_by=app_user_id,
         )
         self.repository.create_batch(batch)
 
-        validator = StudentImportValidator(self.repository, tenant_id, context_branch_id)
+        effective_branch_id = context_branch_id or branch_id
+        validator = StudentImportValidator(self.repository, tenant_id, effective_branch_id)
         
         try:
             row_results, summary = validator.parse_and_validate(file_content)
@@ -89,6 +107,177 @@ class ImportService:
             status=batch.status,
         )
 
+    def generate_student_import_template(self, tenant_id: UUID, context_branch_id: UUID | None) -> bytes:
+        headers = [
+            "Admission No",
+            "Student Name",
+            "Gender",
+            "Date Of Birth",
+            "Student Mobile",
+            "Student Email",
+            "Academic Year",
+            "Programme / Stream",
+            "Section",
+            "Roll No",
+            "Joining Date",
+            "Ending Date",
+            "Guardian Name",
+            "Relationship",
+            "Guardian Phone",
+            "Guardian Email",
+            "Student Created",
+        ]
+        required_headers = {
+            "Admission No",
+            "Student Name",
+            "Gender",
+            "Date Of Birth",
+            "Academic Year",
+            "Programme / Stream",
+            "Section",
+            "Joining Date",
+            "Guardian Name",
+            "Relationship",
+            "Guardian Phone",
+        }
+
+        branches = self.session.execute(
+            text("""
+                SELECT branch_code, display_name
+                FROM sms_branches
+                WHERE tenant_id = :tenant_id
+                    AND status = 'ACTIVE'
+                    AND (CAST(:branch_id AS uuid) IS NULL OR id = CAST(:branch_id AS uuid))
+                ORDER BY display_name
+            """),
+            {"tenant_id": tenant_id, "branch_id": str(context_branch_id) if context_branch_id else None},
+        ).fetchall()
+        academic_years = self.repository.get_academic_years(tenant_id)
+        programmes = self.repository.get_programmes(tenant_id)
+        sections = self.session.execute(
+            text("""
+                SELECT
+                    b.display_name AS branch_name,
+                    ay.name AS academic_year,
+                    ap.programme_name,
+                    bt.batch_name,
+                    s.section_name,
+                    s.section_code
+                FROM sms_sections s
+                JOIN sms_batches bt
+                    ON bt.tenant_id = s.tenant_id
+                    AND bt.branch_id = s.branch_id
+                    AND bt.id = s.batch_id
+                JOIN sms_academic_years ay
+                    ON ay.tenant_id = bt.tenant_id
+                    AND ay.id = bt.academic_year_id
+                JOIN sms_academic_programmes ap
+                    ON ap.tenant_id = bt.tenant_id
+                    AND ap.id = bt.programme_id
+                JOIN sms_branches b
+                    ON b.tenant_id = s.tenant_id
+                    AND b.id = s.branch_id
+                WHERE s.tenant_id = :tenant_id
+                    AND s.status = 'ACTIVE'
+                    AND bt.status = 'ACTIVE'
+                    AND ay.status = 'ACTIVE'
+                    AND ap.status = 'ACTIVE'
+                    AND b.status = 'ACTIVE'
+                    AND (CAST(:branch_id AS uuid) IS NULL OR s.branch_id = CAST(:branch_id AS uuid))
+                ORDER BY b.display_name, ay.name, ap.programme_name, bt.batch_name, s.section_name
+            """),
+            {"tenant_id": tenant_id, "branch_id": str(context_branch_id) if context_branch_id else None},
+        ).fetchall()
+
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = "Student Import"
+        instructions = workbook.create_sheet("Instructions")
+        references = workbook.create_sheet("Reference Values")
+
+        header_fill = PatternFill("solid", fgColor="0F766E")
+        required_fill = PatternFill("solid", fgColor="DCFCE7")
+        locked_fill = PatternFill("solid", fgColor="F1F5F9")
+        header_font = Font(color="FFFFFF", bold=True)
+        note_font = Font(color="64748B", italic=True)
+
+        for index, header in enumerate(headers, start=1):
+            cell = sheet.cell(row=1, column=index, value=header)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center")
+            width = max(14, min(30, len(header) + 6))
+            sheet.column_dimensions[get_column_letter(index)].width = width
+            if header in required_headers:
+                sheet.cell(row=2, column=index, value="Required").fill = required_fill
+            elif header == "Student Created":
+                sheet.cell(row=2, column=index, value="System generated - leave blank").fill = locked_fill
+            else:
+                sheet.cell(row=2, column=index, value="Optional").fill = locked_fill
+            sheet.cell(row=2, column=index).font = note_font
+
+        sheet.freeze_panes = "A3"
+        sheet.auto_filter.ref = f"A1:{get_column_letter(len(headers))}1"
+
+        instructions_rows = [
+            ("Student Import Template", "Fill the Student Import sheet from row 3 onward. Row 1 is headers and row 2 explains required/optional fields."),
+            ("Required columns", ", ".join(sorted(required_headers))),
+            ("Do not fill", "Student Created is generated by the system after import."),
+            ("Dates", "Use YYYY-MM-DD format for Date Of Birth, Joining Date, and Ending Date."),
+            ("Admission No", "Must be unique within the branch. Existing or duplicate admission numbers will be rejected."),
+            ("Student Name", "Same names are allowed, but name + DOB + guardian mobile may produce duplicate warnings in preview."),
+            ("Programme / Stream", "Must match an active programme from the Reference Values sheet."),
+            ("Section", "Must match an active section for the selected branch, academic year, and programme."),
+            ("Relationship", "Use one of: FATHER, MOTHER, LEGAL_GUARDIAN, RELATIVE, SPONSOR, OTHER."),
+            ("Preview before commit", "Upload validates rows first. Records are inserted only after preview confirmation."),
+        ]
+        instructions.column_dimensions["A"].width = 28
+        instructions.column_dimensions["B"].width = 120
+        for row_index, row in enumerate(instructions_rows, start=1):
+            instructions.cell(row=row_index, column=1, value=row[0]).font = Font(bold=True)
+            instructions.cell(row=row_index, column=2, value=row[1])
+            instructions.cell(row=row_index, column=2).alignment = Alignment(wrap_text=True, vertical="top")
+
+        reference_sections = [
+            ("Branches", ["Branch Code", "Branch Name"], [(row.branch_code, row.display_name) for row in branches]),
+            ("Academic Years", ["Academic Year"], [(year.name,) for year in academic_years]),
+            ("Programmes", ["Programme / Stream"], [(programme.programme_name,) for programme in programmes]),
+            ("Sections", ["Branch", "Academic Year", "Programme / Stream", "Batch", "Section", "Section Code"], [
+                (row.branch_name, row.academic_year, row.programme_name, row.batch_name, row.section_name, row.section_code)
+                for row in sections
+            ]),
+            ("Allowed Gender Values", ["Gender"], [("MALE",), ("FEMALE",), ("OTHER",)]),
+            ("Allowed Relationship Values", ["Relationship"], [("FATHER",), ("MOTHER",), ("LEGAL_GUARDIAN",), ("RELATIVE",), ("SPONSOR",), ("OTHER",)]),
+        ]
+        current_row = 1
+        for title, section_headers, rows in reference_sections:
+            references.cell(row=current_row, column=1, value=title).font = Font(bold=True, size=13)
+            current_row += 1
+            for col_index, header in enumerate(section_headers, start=1):
+                cell = references.cell(row=current_row, column=col_index, value=header)
+                cell.fill = header_fill
+                cell.font = header_font
+            current_row += 1
+            for row in rows:
+                for col_index, value in enumerate(row, start=1):
+                    references.cell(row=current_row, column=col_index, value=value)
+                current_row += 1
+            current_row += 2
+        for column in range(1, 8):
+            references.column_dimensions[get_column_letter(column)].width = 28
+
+        max_data_row = 500
+        gender_validation = DataValidation(type="list", formula1='"MALE,FEMALE,OTHER"', allow_blank=False)
+        relationship_validation = DataValidation(type="list", formula1='"FATHER,MOTHER,LEGAL_GUARDIAN,RELATIVE,SPONSOR,OTHER"', allow_blank=False)
+        sheet.add_data_validation(gender_validation)
+        sheet.add_data_validation(relationship_validation)
+        gender_validation.add(f"C3:C{max_data_row}")
+        relationship_validation.add(f"N3:N{max_data_row}")
+
+        output = BytesIO()
+        workbook.save(output)
+        return output.getvalue()
+
     def get_import_preview(self, batch_id: UUID, tenant_id: UUID, context_branch_id: UUID | None) -> PreviewResponse:
         batch = self.repository.get_batch(batch_id)
         if not batch or batch.tenant_id != tenant_id:
@@ -102,6 +291,72 @@ class ImportService:
             batch=ImportBatchResponse.model_validate(batch),
             rows=[ImportRowResult.model_validate(r) for r in rows]
         )
+
+    def correct_import_row(
+        self,
+        batch_id: UUID,
+        row_id: UUID,
+        tenant_id: UUID,
+        raw_data: dict[str, Any],
+        context_branch_id: UUID | None,
+    ) -> PreviewResponse:
+        batch = self.repository.get_batch(batch_id)
+        if not batch or batch.tenant_id != tenant_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Batch not found.")
+        if context_branch_id and batch.branch_id and batch.branch_id != context_branch_id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized for this batch.")
+        if batch.status not in ["PREVIEW", "FAILED"]:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only preview batches can be corrected.")
+
+        rows = list(self.repository.get_rows(batch_id))
+        target_row = next((row for row in rows if row.id == row_id), None)
+        if target_row is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Import row not found.")
+
+        target_row.raw_data = raw_data
+
+        headers = [
+            "Admission No",
+            "Student Name",
+            "Gender",
+            "Date Of Birth",
+            "Student Mobile",
+            "Student Email",
+            "Academic Year",
+            "Programme / Stream",
+            "Section",
+            "Roll No",
+            "Joining Date",
+            "Ending Date",
+            "Guardian Name",
+            "Relationship",
+            "Guardian Phone",
+            "Guardian Email",
+            "Student Created",
+        ]
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.append(headers)
+        for row in rows:
+            source = row.raw_data or {}
+            sheet.append([source.get(header, "") for header in headers])
+        output = BytesIO()
+        workbook.save(output)
+
+        validator = StudentImportValidator(self.repository, tenant_id, context_branch_id or batch.branch_id)
+        row_results, summary = validator.parse_and_validate(output.getvalue())
+
+        for import_row, result in zip(rows, row_results, strict=False):
+            import_row.raw_data = result["raw_data"]
+            import_row.normalized_data = result["normalized_data"]
+            import_row.validation_status = result["validation_status"]
+            import_row.errors = result["errors"]
+            self.repository.update_batch(batch)
+
+        batch.summary = summary
+        batch.status = "PREVIEW"
+        self.session.commit()
+        return self.get_import_preview(batch_id, tenant_id, context_branch_id)
 
     def commit_student_import(self, batch_id: UUID, tenant_id: UUID, app_user_id: UUID, context_branch_id: UUID | None) -> dict[str, Any]:
         batch = self.repository.get_batch(batch_id)
@@ -137,6 +392,7 @@ class ImportService:
                         date_of_birth=datetime.fromisoformat(data["date_of_birth"]).date() if data.get("date_of_birth") else None,
                         gender=data["gender"],
                         student_mobile=data.get("student_mobile"),
+                        student_email=data.get("student_email"),
                         current_status="ACTIVE",
                         source_type="IMPORT",
                         created_by=app_user_id,
@@ -154,6 +410,7 @@ class ImportService:
                             tenant_id=tenant_id,
                             full_name=data["guardian_name"],
                             mobile=data["guardian_mobile"],
+                            email=data.get("guardian_email"),
                             verification_status="UNVERIFIED",
                             status="ACTIVE",
                             created_by=app_user_id,
@@ -191,6 +448,7 @@ class ImportService:
                         year_level=data["year_level"],
                         status="ACTIVE",
                         joining_date=datetime.fromisoformat(data["joining_date"]).date() if data.get("joining_date") else None,
+                        ending_date=datetime.fromisoformat(data["ending_date"]).date() if data.get("ending_date") else None,
                         is_current=True,
                         source_type="IMPORT",
                         created_by=app_user_id,

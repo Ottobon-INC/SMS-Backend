@@ -48,6 +48,10 @@ class PreviewResponse(BaseModel):
     rows: list[ImportRowResult]
 
 
+class ImportRowCorrectionRequest(BaseModel):
+    raw_data: dict[str, Any]
+
+
 class CommitResponse(BaseModel):
     message: str
     batch: ImportBatchResponse
