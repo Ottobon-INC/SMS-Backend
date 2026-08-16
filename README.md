@@ -180,10 +180,11 @@ The Fee module currently has three manually created PostgreSQL tables mapped in 
 - `sms_fee_ledger_entries`
 - `sms_fee_adjustment_requests`
 
-The backend registers these models through `app/model_registry.py` and exposes a read-only endpoint:
+The backend registers these models through `app/model_registry.py` and exposes scoped endpoints:
 
 ```text
 GET /api/v1/fees/accounts
+GET /api/v1/fees/accounts/{account_id}/ledger
 ```
 
 Fee account setup endpoints:
@@ -193,4 +194,32 @@ GET  /api/v1/fees/setup-options
 POST /api/v1/fees/accounts
 ```
 
-Listing requires `fee.view`. Initial account setup requires `fee.basic_assign` and applies tenant and branch scope from the shared request context. Payment receipts, later scholarships/concessions, reversals and adjustment approvals are not implemented yet.
+Payment posting endpoint:
+
+```text
+POST /api/v1/fees/accounts/{account_id}/payments
+```
+
+Listing and ledger viewing require `fee.view`. Initial account setup requires `fee.basic_assign`.
+Payment posting requires `fee.payment_record`.
+
+All fee endpoints apply tenant and branch scope from the shared request context. The frontend sends
+only operational inputs. The backend derives tenant, branch, student, enrollment and academic-year
+context from protected database records.
+
+Implemented fee behavior:
+
+- Manual fee setup for one active enrollment.
+- Bulk fee setup through the Imports module.
+- Initial ledger rows for fee assigned, government scholarship, and concession.
+- Payment posting with receipt number, mode, date, optional reference, optional period/installment,
+  and notes.
+- Fee account paid/outstanding total updates.
+- Read-only ledger/payment history.
+
+Not yet implemented:
+
+- Receipt PDF/download.
+- Payment reversal.
+- Fee adjustment approval workflow.
+- Parent Portal fee view.
