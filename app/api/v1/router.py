@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from app.modules.academic_structure.router import router as academic_structure_router
+from app.modules.attendance.router import router as attendance_router
 from app.modules.authentication.router import router as authentication_router
 from app.modules.branches.router import router as branches_router
 from app.modules.examinations.router import router as examinations_router
@@ -12,6 +13,7 @@ from app.modules.users.router import router as users_router
 
 router = APIRouter(prefix="/api/v1")
 router.include_router(academic_structure_router)
+router.include_router(attendance_router)
 router.include_router(authentication_router)
 router.include_router(branches_router)
 router.include_router(examinations_router)

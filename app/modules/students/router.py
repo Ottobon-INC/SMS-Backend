@@ -430,6 +430,9 @@ def create_student(payload: dict, db: Session = Depends(get_db_session)):
     ).fetchone()
     db.commit()
 
+    if res is None:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to create student")
+
     return {
         "id": str(res.id),
         "admissionNumber": res.student_number,

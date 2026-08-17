@@ -266,6 +266,7 @@ class ImportService:
 
         workbook = Workbook()
         sheet = workbook.active
+        assert sheet is not None
         sheet.title = "Student Import"
         instructions = workbook.create_sheet("Instructions")
         references = workbook.create_sheet("Reference Values")
@@ -411,6 +412,7 @@ class ImportService:
 
         workbook = Workbook()
         sheet = workbook.active
+        assert sheet is not None
         sheet.title = "Fee Import"
         instructions = workbook.create_sheet("Instructions")
         references = workbook.create_sheet("Eligible Enrollments")
@@ -543,6 +545,7 @@ class ImportService:
         ]
         workbook = Workbook()
         sheet = workbook.active
+        assert sheet is not None
         sheet.append(headers)
         for row in rows:
             source = row.raw_data or {}
@@ -601,6 +604,7 @@ class ImportService:
         ]
         workbook = Workbook()
         sheet = workbook.active
+        assert sheet is not None
         sheet.append(headers)
         for row in rows:
             source = row.raw_data or {}

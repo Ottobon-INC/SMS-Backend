@@ -106,6 +106,7 @@ class Enrollment(Base):
     batch_id: Any
     section_id: Any
     admission_number: Any
+    roll_number: Any
     status: Any
     is_current: Any
 

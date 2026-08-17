@@ -25,6 +25,8 @@ class ImportBatch(Base):
     id: Any
     tenant_id: Any
     branch_id: Any
+    module_code: Any
+    idempotency_key: Any
     status: Any
     summary: Any
     committed_at: Any
@@ -87,7 +89,7 @@ class ImportRow(Base):
         uuid_pk(),
         uuid_col("batch_id", nullable=False),
         int_col("row_number", nullable=False),
-        jsonb("raw_data", default=None),
+        jsonb("raw_data"),
         jsonb("normalized_data"),
         text_col("validation_status", nullable=False),
         jsonb("errors", default="'[]'::jsonb"),
