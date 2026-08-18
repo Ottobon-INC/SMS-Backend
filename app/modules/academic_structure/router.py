@@ -41,6 +41,72 @@ def get_academic_years(db: Session = Depends(get_db_session)):
         for r in rows
     ]
 
+@router.post("/academic-years")
+def create_academic_year(payload: dict, db: Session = Depends(get_db_session)):
+    tenant_id = str(DEFAULT_TENANT_ID)
+    user_id = str(DEFAULT_USER_ID)
+    ay_id = payload.get("id") or str(uuid.uuid4())
+    name = payload.get("name") or "2026-2027"
+    code = payload.get("code") or (name.replace("20", "") if len(name) == 9 else name)
+    starts_on = payload.get("startsOn") or payload.get("starts_on") or f"{name[:4]}-06-01"
+    ends_on = payload.get("endsOn") or payload.get("ends_on") or f"20{code[-2:] if len(code)>=2 else '27'}-04-30"
+    is_default = bool(payload.get("isDefault"))
+
+    if is_default:
+        db.execute(
+            text("UPDATE sms_academic_years SET is_default = false WHERE tenant_id = :tenant_id"),
+            {"tenant_id": tenant_id},
+        )
+
+    query = text("""
+        INSERT INTO sms_academic_years (
+            id, tenant_id, code, name, starts_on, ends_on, status, is_default, created_by, created_at, updated_at
+        )
+        VALUES (
+            :id, :tenant_id, :code, :name, CAST(:starts_on AS date), CAST(:ends_on AS date), 'ACTIVE', :is_default, :created_by, NOW(), NOW()
+        )
+        RETURNING id, code, name, starts_on, ends_on, status, is_default
+    """)
+    res = db.execute(
+        query,
+        {
+            "id": ay_id,
+            "tenant_id": tenant_id,
+            "code": code,
+            "name": name,
+            "starts_on": starts_on,
+            "ends_on": ends_on,
+            "is_default": is_default,
+            "created_by": user_id,
+        },
+    ).fetchone()
+    db.commit()
+
+    return {
+        "id": str(res.id),
+        "code": res.code,
+        "name": res.name,
+        "startsOn": res.starts_on.isoformat(),
+        "endsOn": res.ends_on.isoformat(),
+        "status": res.status,
+        "isDefault": res.is_default,
+    }
+
+@router.patch("/academic-years/{ay_id}/default")
+def set_default_academic_year(ay_id: UUID, db: Session = Depends(get_db_session)):
+    tenant_id = str(DEFAULT_TENANT_ID)
+    db.execute(
+        text("UPDATE sms_academic_years SET is_default = false WHERE tenant_id = :tenant_id"),
+        {"tenant_id": tenant_id},
+    )
+    db.execute(
+        text("UPDATE sms_academic_years SET is_default = true, updated_at = NOW() WHERE id = :ay_id AND tenant_id = :tenant_id"),
+        {"ay_id": ay_id, "tenant_id": tenant_id},
+    )
+    db.commit()
+    return {"status": "ok", "message": f"Academic year {ay_id} set as default."}
+
+
 @router.get("/subjects")
 def get_subjects(db: Session = Depends(get_db_session)):
     query = text("""
@@ -78,7 +144,7 @@ def create_subject(payload: dict, db: Session = Depends(get_db_session)):
     subject_type = payload.get("type") or payload.get("subjectType") or "CORE"
     max_marks = int(payload.get("maxMarks") or 100)
     pass_marks = int(payload.get("passMarks") or 35)
-    
+
     query = text("""
         INSERT INTO sms_subjects (
             id, tenant_id, subject_code, subject_name, subject_type, status,
@@ -157,7 +223,7 @@ def create_programme(payload: dict, db: Session = Depends(get_db_session)):
     coaching_track = payload.get("coachingTrack")
     year_level = payload.get("yearLevel") or "First Year"
     subject_ids = payload.get("subjectIds") or []
-    
+
     query = text("""
         INSERT INTO sms_academic_programmes (
             id, tenant_id, programme_code, programme_name, stream_code,

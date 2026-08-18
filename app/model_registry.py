@@ -35,6 +35,8 @@ FOUNDATION_TABLE_NAMES = {
     "sms_fee_accounts",
     "sms_fee_ledger_entries",
     "sms_fee_adjustment_requests",
+    "sms_attendance_sessions",
+    "sms_attendance_records",
 }
 
 
@@ -43,6 +45,7 @@ def import_foundation_models() -> None:
 
     import app.modules.academic_structure.models  # noqa: F401
     import app.modules.audit.models  # noqa: F401
+    import app.modules.attendance.models  # noqa: F401
     import app.modules.branches.models  # noqa: F401
     import app.modules.examinations.models  # noqa: F401
     import app.modules.fees.models  # noqa: F401

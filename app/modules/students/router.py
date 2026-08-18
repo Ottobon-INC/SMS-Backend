@@ -78,7 +78,8 @@ def _fetch_student_scope(db: Session, student_id: UUID, tenant_id: UUID) -> Any 
 @router.get("")
 @router.get("/")
 def get_students(
-    branch_id: str | None = None, 
+    branch_id: str | None = None,
+    section_id: str | None = None,
     context: RequestContext = Depends(get_request_context),
     db: Session = Depends(get_db_session)
 ):
@@ -186,9 +187,14 @@ def get_students(
             s.tenant_id = :tenant_id
             AND s.current_status = 'ACTIVE'
             AND (CAST(:branch_id AS uuid) IS NULL OR e.branch_id = CAST(:branch_id AS uuid))
+            AND (CAST(:section_id AS uuid) IS NULL OR e.section_id = CAST(:section_id AS uuid))
         ORDER BY s.created_at DESC
     """)
-    rows = db.execute(query, {"tenant_id": context.tenant_id, "branch_id": target_branch_id}).fetchall()
+    rows = db.execute(query, {
+        "tenant_id": context.tenant_id, 
+        "branch_id": target_branch_id, 
+        "section_id": section_id
+    }).fetchall()
 
     def to_iso(value):
         return value.isoformat() if hasattr(value, "isoformat") else value

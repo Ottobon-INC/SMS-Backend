@@ -110,10 +110,13 @@ def publish_exam(
     user_id: UUID = Query(DEFAULT_USER_ID),
     service: ExaminationsService = Depends(get_exam_service),
 ) -> ExamRead:
-    exam = service.publish_exam(exam_id=exam_id, tenant_id=tenant_id, user_id=user_id)
-    if not exam:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Exam not found.")
-    return exam
+    try:
+        exam = service.publish_exam(exam_id=exam_id, tenant_id=tenant_id, user_id=user_id)
+        if not exam:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Exam not found.")
+        return exam
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
 @router.get("/{exam_id}/subjects", response_model=list[ExamSubjectRead])
@@ -143,9 +146,12 @@ def bulk_save_student_exam_records(
     user_id: UUID = Query(DEFAULT_USER_ID),
     service: ExaminationsService = Depends(get_exam_service),
 ) -> list[StudentExamRecordRead]:
-    return service.bulk_save_student_exam_records(
-        tenant_id=tenant_id,
-        exam_id=exam_id,
-        user_id=user_id,
-        records=payload.records,
-    )
+    try:
+        return service.bulk_save_student_exam_records(
+            tenant_id=tenant_id,
+            exam_id=exam_id,
+            user_id=user_id,
+            records=payload.records,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Failed to bulk save records: {exc}") from exc

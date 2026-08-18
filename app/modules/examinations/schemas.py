@@ -111,10 +111,10 @@ class ReturnForCorrectionRequest(BaseModel):
 # --- StudentExamRecord Schemas ---
 
 class StudentExamRecordSave(BaseModel):
-    enrollment_id: UUID
-    student_id: UUID
-    section_id: UUID
-    subject_marks: dict[str, float]  # subject_id -> mark score (-1: ABSENT, -2: EXEMPTED, -3: MALPRACTICE)
+    enrollment_id: str | UUID
+    student_id: str | UUID
+    section_id: str | UUID
+    subject_marks: dict[str, float] = {}
     status: str | None = "DRAFT"
 
 
@@ -126,14 +126,14 @@ class StudentExamRecordRead(BaseModel):
     id: UUID
     tenant_id: UUID
     exam_id: UUID
-    enrollment_id: UUID
-    student_id: UUID
-    section_id: UUID
-    subject_marks: dict[str, float]
+    enrollment_id: str | UUID
+    student_id: str | UUID
+    section_id: str | UUID
+    subject_marks: dict[str, float] = {}
     status: str
     entered_by: UUID
-    created_at: datetime
-    updated_at: datetime
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
     class Config:
         from_attributes = True

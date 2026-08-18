@@ -7,18 +7,23 @@ from sqlalchemy.orm import Session
 
 from app.core.database.session import get_db_session
 from app.core.security.context import RequestContext
-from app.core.security.dependencies import require_any_permission, require_branch_scope, require_tenant_scope
-from app.modules.attendance import schemas, service, repository
+from app.core.security.dependencies import (
+    require_any_permission,
+    require_branch_scope,
+    require_tenant_scope,
+)
+from app.modules.attendance import repository, schemas, service
 
 router = APIRouter(prefix="/attendance/sessions", tags=["attendance"])
+
 
 @router.get("", response_model=list[schemas.AttendanceSessionListItem])
 def list_sessions(
     status: str | None = None,
     db: Session = Depends(get_db_session),
     context: RequestContext = Depends(require_tenant_scope),
-    _: RequestContext = Depends(require_any_permission({"attendance.view"}))
-):
+    _: RequestContext = Depends(require_any_permission({"attendance.view"})),
+) -> list[schemas.AttendanceSessionListItem]:
     """List attendance sessions for the current branch or tenant."""
     assert context.tenant_id is not None
     return service.list_sessions(
@@ -33,24 +38,29 @@ def create_session(
     payload: schemas.AttendanceSessionCreate,
     db: Session = Depends(get_db_session),
     context: RequestContext = Depends(require_branch_scope),
-    _: RequestContext = Depends(require_any_permission({"attendance.mark", "attendance.submit", "attendance.view"}))
-):
+    _: RequestContext = Depends(
+        require_any_permission({"attendance.mark", "attendance.submit", "attendance.view"})
+    ),
+) -> schemas.AttendanceSessionResponse:
     """Create a new daily attendance session (or return existing)."""
     assert context.tenant_id is not None
     assert context.branch_id is not None
-    
+
     # First check if the session already exists
     existing_session = repository.get_session_by_section_and_date(
         db, UUID(payload.sectionId), payload.attendanceDate
     )
     if existing_session:
         return service._build_session_response(db, existing_session)
-        
+
     # If we are actually creating a new session, the user must have mutation permissions
-    if not (context.has_permission("attendance.mark") or context.has_permission("attendance.submit")):
+    if not (
+        context.has_permission("attendance.mark")
+        or context.has_permission("attendance.submit")
+    ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Permission denied. You can view existing sessions but cannot create new ones."
+            detail="Permission denied. You can view existing sessions but cannot create new ones.",
         )
 
     return service.create_daily_session(
@@ -67,8 +77,8 @@ def get_session(
     session_id: UUID,
     db: Session = Depends(get_db_session),
     context: RequestContext = Depends(require_tenant_scope),
-    _: RequestContext = Depends(require_any_permission({"attendance.view"}))
-):
+    _: RequestContext = Depends(require_any_permission({"attendance.view"})),
+) -> schemas.AttendanceSessionResponse:
     """Get a specific attendance session with all student records."""
     assert context.tenant_id is not None
     return service.get_session_with_records(
@@ -85,8 +95,8 @@ def save_draft(
     payload: schemas.AttendanceDraftSavePayload,
     db: Session = Depends(get_db_session),
     context: RequestContext = Depends(require_branch_scope),
-    _: RequestContext = Depends(require_any_permission({"attendance.mark"}))
-):
+    _: RequestContext = Depends(require_any_permission({"attendance.mark"})),
+) -> schemas.AttendanceSessionResponse:
     """Save draft attendance records."""
     assert context.tenant_id is not None
     assert context.branch_id is not None
@@ -105,8 +115,8 @@ def submit_session(
     session_id: UUID,
     db: Session = Depends(get_db_session),
     context: RequestContext = Depends(require_branch_scope),
-    _: RequestContext = Depends(require_any_permission({"attendance.submit"}))
-):
+    _: RequestContext = Depends(require_any_permission({"attendance.submit"})),
+) -> schemas.AttendanceSessionResponse:
     """Submit an attendance session for principal review."""
     assert context.tenant_id is not None
     assert context.branch_id is not None
@@ -124,8 +134,8 @@ def finalize_session(
     session_id: UUID,
     db: Session = Depends(get_db_session),
     context: RequestContext = Depends(require_branch_scope),
-    _: RequestContext = Depends(require_any_permission({"attendance.finalize"}))
-):
+    _: RequestContext = Depends(require_any_permission({"attendance.finalize"})),
+) -> schemas.AttendanceSessionResponse:
     """Finalize a submitted attendance session."""
     assert context.tenant_id is not None
     assert context.branch_id is not None
