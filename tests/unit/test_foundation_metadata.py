@@ -13,6 +13,7 @@ MODEL_MODULES = [
     "app.modules.academic_structure.models",
     "app.modules.audit.models",
     "app.modules.authentication.models",
+    "app.modules.attendance.models",
     "app.modules.branches.models",
     "app.modules.examinations.models",
     "app.modules.fees.models",

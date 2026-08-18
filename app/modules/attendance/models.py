@@ -5,6 +5,7 @@
 from typing import Any
 
 from sqlalchemy import CheckConstraint, ForeignKeyConstraint, Index, Table, UniqueConstraint
+
 from app.shared.models.base import Base
 from app.shared.models.foundation_columns import (
     date_col,
@@ -50,15 +51,59 @@ class AttendanceSession(Base):
         timestamp("finalized_at", nullable=True),
         timestamp("created_at", nullable=False, default_now=True),
         timestamp("updated_at", nullable=False, default_now=True),
-        UniqueConstraint("tenant_id", "branch_id", "section_id", "attendance_date", name="uq_sms_attendance_sessions_scope"),
-        CheckConstraint("status IN ('DRAFT', 'SUBMITTED', 'FINALIZED')", name="ck_sms_attendance_sessions_status"),
-        ForeignKeyConstraint(["tenant_id"], ["sms_tenants.id"], name="fk_sms_attendance_sessions_tenant", ondelete="RESTRICT"),
-        ForeignKeyConstraint(["branch_id"], ["sms_branches.id"], name="fk_sms_attendance_sessions_branch", ondelete="RESTRICT"),
-        ForeignKeyConstraint(["academic_year_id"], ["sms_academic_years.id"], name="fk_sms_attendance_sessions_academic_year", ondelete="RESTRICT"),
-        ForeignKeyConstraint(["section_id"], ["sms_sections.id"], name="fk_sms_attendance_sessions_section", ondelete="RESTRICT"),
-        ForeignKeyConstraint(["opened_by"], ["sms_users.id"], name="fk_sms_attendance_sessions_opened_by", ondelete="RESTRICT"),
-        ForeignKeyConstraint(["submitted_by"], ["sms_users.id"], name="fk_sms_attendance_sessions_submitted_by", ondelete="SET NULL"),
-        ForeignKeyConstraint(["finalized_by"], ["sms_users.id"], name="fk_sms_attendance_sessions_finalized_by", ondelete="SET NULL"),
+        UniqueConstraint(
+            "tenant_id",
+            "branch_id",
+            "section_id",
+            "attendance_date",
+            name="uq_sms_attendance_sessions_scope",
+        ),
+        CheckConstraint(
+            "status IN ('DRAFT', 'SUBMITTED', 'FINALIZED')",
+            name="ck_sms_attendance_sessions_status",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id"],
+            ["sms_tenants.id"],
+            name="fk_sms_attendance_sessions_tenant",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["branch_id"],
+            ["sms_branches.id"],
+            name="fk_sms_attendance_sessions_branch",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["academic_year_id"],
+            ["sms_academic_years.id"],
+            name="fk_sms_attendance_sessions_academic_year",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["section_id"],
+            ["sms_sections.id"],
+            name="fk_sms_attendance_sessions_section",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["opened_by"],
+            ["sms_users.id"],
+            name="fk_sms_attendance_sessions_opened_by",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["submitted_by"],
+            ["sms_users.id"],
+            name="fk_sms_attendance_sessions_submitted_by",
+            ondelete="SET NULL",
+        ),
+        ForeignKeyConstraint(
+            ["finalized_by"],
+            ["sms_users.id"],
+            name="fk_sms_attendance_sessions_finalized_by",
+            ondelete="SET NULL",
+        ),
         Index("ix_sms_attendance_sessions_date_branch", "attendance_date", "branch_id"),
         Index("ix_sms_attendance_sessions_status", "status"),
     )
@@ -93,13 +138,45 @@ class AttendanceRecord(Base):
         timestamp("marked_at", nullable=False, default_now=True),
         timestamp("created_at", nullable=False, default_now=True),
         timestamp("updated_at", nullable=False, default_now=True),
-        UniqueConstraint("session_id", "enrollment_id", name="uq_sms_attendance_records_session_enrollment"),
-        CheckConstraint("attendance_status IN ('PRESENT', 'ABSENT', 'LEAVE')", name="ck_sms_attendance_records_status"),
-        ForeignKeyConstraint(["tenant_id"], ["sms_tenants.id"], name="fk_sms_attendance_records_tenant", ondelete="RESTRICT"),
-        ForeignKeyConstraint(["branch_id"], ["sms_branches.id"], name="fk_sms_attendance_records_branch", ondelete="RESTRICT"),
-        ForeignKeyConstraint(["session_id"], ["sms_attendance_sessions.id"], name="fk_sms_attendance_records_session", ondelete="CASCADE"),
-        ForeignKeyConstraint(["enrollment_id"], ["sms_enrollments.id"], name="fk_sms_attendance_records_enrollment", ondelete="RESTRICT"),
-        ForeignKeyConstraint(["marked_by"], ["sms_users.id"], name="fk_sms_attendance_records_marked_by", ondelete="RESTRICT"),
+        UniqueConstraint(
+            "session_id",
+            "enrollment_id",
+            name="uq_sms_attendance_records_session_enrollment",
+        ),
+        CheckConstraint(
+            "attendance_status IN ('PRESENT', 'ABSENT', 'LEAVE')",
+            name="ck_sms_attendance_records_status",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id"],
+            ["sms_tenants.id"],
+            name="fk_sms_attendance_records_tenant",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["branch_id"],
+            ["sms_branches.id"],
+            name="fk_sms_attendance_records_branch",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["session_id"],
+            ["sms_attendance_sessions.id"],
+            name="fk_sms_attendance_records_session",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["enrollment_id"],
+            ["sms_enrollments.id"],
+            name="fk_sms_attendance_records_enrollment",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["marked_by"],
+            ["sms_users.id"],
+            name="fk_sms_attendance_records_marked_by",
+            ondelete="RESTRICT",
+        ),
         Index("ix_sms_attendance_records_session", "session_id"),
         Index("ix_sms_attendance_records_enrollment", "enrollment_id"),
     )

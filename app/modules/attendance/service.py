@@ -5,20 +5,24 @@ from typing import Any
 from uuid import UUID
 
 from fastapi import HTTPException, status
-from sqlalchemy.orm import Session
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
-from app.modules.academic_structure.models import Section, Batch
+from app.modules.academic_structure.models import Batch, Section
 from app.modules.attendance import repository, schemas
 from app.modules.attendance.models import AttendanceRecord, AttendanceSession
 
 
 def _get_section_or_404(db: Session, section_id: UUID, tenant_id: UUID, branch_id: UUID) -> Section:
-    section = db.query(Section).filter_by(id=section_id, tenant_id=tenant_id, branch_id=branch_id).first()
+    section = (
+        db.query(Section)
+        .filter_by(id=section_id, tenant_id=tenant_id, branch_id=branch_id)
+        .first()
+    )
     if not section:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Section not found or access denied."
+            detail="Section not found or access denied.",
         )
     return section
 
@@ -30,13 +34,13 @@ def _get_session_or_404(
     if not session or session.tenant_id != tenant_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Attendance session not found or access denied."
+            detail="Attendance session not found or access denied.",
         )
     # If caller has branch scope (Office Staff / Principal), also enforce branch match
     if branch_id is not None and session.branch_id != branch_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Attendance session not found or access denied."
+            detail="Attendance session not found or access denied.",
         )
     return session
 
@@ -45,7 +49,8 @@ def _get_user_name(db: Session, user_id: UUID | None) -> str | None:
     """Resolve a user UUID to the user's full_name. Returns None if not found."""
     if user_id is None:
         return None
-    from sqlalchemy import table, column, select, String
+    from sqlalchemy import String, column, table
+
     sms_users = table("sms_users", column("id"), column("full_name", String))
     stmt = select(sms_users.c.full_name).where(sms_users.c.id == user_id)
     row = db.execute(stmt).fetchone()
@@ -63,15 +68,17 @@ def _build_session_response(
     students = []
     for enrollment, student in enrollments_data:
         record = record_map.get(enrollment.id)
-        students.append(schemas.AttendanceStudentResponse(
-            enrollmentId=str(enrollment.id),
-            studentId=str(student.id),
-            studentName=student.display_name or student.legal_name,
-            admissionNumber=enrollment.admission_number,
-            rollNumber=enrollment.roll_number,
-            attendanceStatus=record.attendance_status if record else "UNMARKED",
-            note=record.note if record else None
-        ))
+        students.append(
+            schemas.AttendanceStudentResponse(
+                enrollmentId=str(enrollment.id),
+                studentId=str(student.id),
+                studentName=student.display_name or student.legal_name,
+                admissionNumber=enrollment.admission_number,
+                rollNumber=enrollment.roll_number,
+                attendanceStatus=record.attendance_status if record else "UNMARKED",
+                note=record.note if record else None,
+            )
+        )
 
     return schemas.AttendanceSessionResponse(
         id=str(session.id),
@@ -86,7 +93,7 @@ def _build_session_response(
         submittedAt=session.submitted_at,
         finalizedBy=_get_user_name(db, session.finalized_by),
         finalizedAt=session.finalized_at,
-        students=students
+        students=students,
     )
 
 
@@ -101,7 +108,7 @@ def create_daily_session(
     if payload.attendanceDate > date.today():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cannot mark attendance for future dates."
+            detail="Cannot mark attendance for future dates.",
         )
 
     section_id = UUID(payload.sectionId)
@@ -110,9 +117,16 @@ def create_daily_session(
     # get academic_year_id from Batch
     batch = db.query(Batch).filter_by(id=section.batch_id).first()
     if not batch:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Batch configuration missing")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Batch configuration missing",
+        )
 
-    existing_session = repository.get_session_by_section_and_date(db, section_id, payload.attendanceDate)
+    existing_session = repository.get_session_by_section_and_date(
+        db,
+        section_id,
+        payload.attendanceDate,
+    )
     if existing_session:
         return _build_session_response(db, existing_session)
 
@@ -125,7 +139,7 @@ def create_daily_session(
         status="DRAFT",
         opened_by=user_id,
     )
-    
+
     created_session = repository.create_session(db, new_session)
     db.commit()
     return _build_session_response(db, created_session)
@@ -152,19 +166,19 @@ def save_draft_records(
 ) -> schemas.AttendanceSessionResponse:
     """Save attendance records as a draft."""
     session = _get_session_or_404(db, session_id, tenant_id, branch_id)
-    
+
     if session.status != "DRAFT":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Can only save draft records for a DRAFT session."
+            detail="Can only save draft records for a DRAFT session.",
         )
-        
+
     now_ts = datetime.now(timezone.utc)
-    
+
     for record_data in payload.records:
         if record_data.attendanceStatus == "UNMARKED":
             continue
-            
+
         record = AttendanceRecord(
             tenant_id=tenant_id,
             branch_id=branch_id,
@@ -177,7 +191,7 @@ def save_draft_records(
             updated_at=now_ts,
         )
         repository.upsert_attendance_record(db, record)
-        
+
     db.commit()
     return _build_session_response(db, session)
 
@@ -191,31 +205,37 @@ def submit_session(
 ) -> schemas.AttendanceSessionResponse:
     """Submit a draft attendance session for review."""
     session = _get_session_or_404(db, session_id, tenant_id, branch_id)
-    
+
     if session.status != "DRAFT":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Only DRAFT sessions can be submitted."
+            detail="Only DRAFT sessions can be submitted.",
         )
-        
+
     # Verify all active enrollments have a record
     enrollments_data = repository.get_active_enrollments_for_section(db, session.section_id)
     records = repository.get_records_for_session(db, session.id)
-    
+
     record_map = {r.enrollment_id: r for r in records}
-    
+
     missing_students = []
     for enrollment, student in enrollments_data:
         if enrollment.id not in record_map:
             missing_students.append(student.display_name or student.legal_name)
-            
+
     if missing_students:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Cannot submit. Missing attendance for {len(missing_students)} students."
+            detail=f"Cannot submit. Missing attendance for {len(missing_students)} students.",
         )
-        
-    repository.update_session_status(db, session.id, "SUBMITTED", user_id, datetime.now(timezone.utc))
+
+    repository.update_session_status(
+        db,
+        session.id,
+        "SUBMITTED",
+        user_id,
+        datetime.now(timezone.utc),
+    )
     db.commit()
     return _build_session_response(db, session)
 
@@ -229,14 +249,20 @@ def finalize_session(
 ) -> schemas.AttendanceSessionResponse:
     """Finalize a submitted attendance session."""
     session = _get_session_or_404(db, session_id, tenant_id, branch_id)
-    
+
     if session.status != "SUBMITTED":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Only SUBMITTED sessions can be finalized."
+            detail="Only SUBMITTED sessions can be finalized.",
         )
-        
-    repository.update_session_status(db, session.id, "FINALIZED", user_id, datetime.now(timezone.utc))
+
+    repository.update_session_status(
+        db,
+        session.id,
+        "FINALIZED",
+        user_id,
+        datetime.now(timezone.utc),
+    )
     db.commit()
     return _build_session_response(db, session)
 
@@ -245,11 +271,11 @@ def list_sessions(
     db: Session,
     tenant_id: UUID,
     branch_id: UUID | None,
-    status_filter: str | None = None
+    status_filter: str | None = None,
 ) -> list[schemas.AttendanceSessionListItem]:
     """Retrieve all attendance sessions for a branch or tenant, joined with academic structures."""
     results = repository.get_sessions_list(db, tenant_id, branch_id, status_filter)
-    
+
     return [
         schemas.AttendanceSessionListItem(
             id=str(session.id),
