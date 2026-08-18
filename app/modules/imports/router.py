@@ -284,12 +284,17 @@ def get_batches_lookup(
 @router.get("/lookups/sections", response_model=list[SectionLookup])
 def get_sections_lookup(
     batch_id: UUID,
+    branch_id: UUID | None = None,
     context: RequestContext = Depends(get_request_context),
     service: ImportService = Depends(get_import_service)
 ):
     assert context.tenant_id is not None
-    assert context.branch_id is not None
-    sections = service.repository.get_sections(context.tenant_id, context.branch_id, batch_id)
+    
+    target_branch_id = branch_id
+    if context.branch_id is not None:
+        target_branch_id = context.branch_id
+        
+    sections = service.repository.get_sections(context.tenant_id, target_branch_id, batch_id)
     return [{"id": s.id, "name": s.section_name} for s in sections]
 
 

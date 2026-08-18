@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database.session import get_db_session
 from app.core.security.context import RequestContext
-from app.core.security.dependencies import require_any_permission
+from app.core.security.dependencies import require_any_permission, get_request_context
 
 router = APIRouter(prefix="/students", tags=["students"])
 
@@ -77,7 +77,18 @@ def _fetch_student_scope(db: Session, student_id: UUID, tenant_id: UUID) -> Any 
 
 @router.get("")
 @router.get("/")
-def get_students(branch_id: str | None = None, db: Session = Depends(get_db_session)):
+def get_students(
+    branch_id: str | None = None, 
+    context: RequestContext = Depends(get_request_context),
+    db: Session = Depends(get_db_session)
+):
+    assert context.tenant_id is not None
+    
+    # Enforce scope if user is branch-limited (e.g. Principal)
+    target_branch_id = branch_id
+    if context.branch_id is not None:
+        target_branch_id = str(context.branch_id)
+
     query = text("""
         SELECT
             s.id,
@@ -177,7 +188,7 @@ def get_students(branch_id: str | None = None, db: Session = Depends(get_db_sess
             AND (CAST(:branch_id AS uuid) IS NULL OR e.branch_id = CAST(:branch_id AS uuid))
         ORDER BY s.created_at DESC
     """)
-    rows = db.execute(query, {"tenant_id": DEFAULT_TENANT_ID, "branch_id": branch_id}).fetchall()
+    rows = db.execute(query, {"tenant_id": context.tenant_id, "branch_id": target_branch_id}).fetchall()
 
     def to_iso(value):
         return value.isoformat() if hasattr(value, "isoformat") else value

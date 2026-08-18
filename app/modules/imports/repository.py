@@ -220,13 +220,15 @@ class ImportRepository:
         stmt = stmt.order_by(Batch.batch_name)
         return self.session.scalars(stmt).all()
 
-    def get_sections(self, tenant_id: UUID, branch_id: UUID, batch_id: UUID) -> Sequence[Section]:
+    def get_sections(self, tenant_id: UUID, branch_id: UUID | None, batch_id: UUID) -> Sequence[Section]:
         stmt = select(Section).where(
             Section.tenant_id == tenant_id,
-            Section.branch_id == branch_id,
             Section.batch_id == batch_id,
             Section.status == 'ACTIVE'
-        ).order_by(Section.section_name)
+        )
+        if branch_id:
+            stmt = stmt.where(Section.branch_id == branch_id)
+        stmt = stmt.order_by(Section.section_name)
         return self.session.scalars(stmt).all()
 
     def find_fee_import_enrollments(
