@@ -200,3 +200,352 @@ def assign_principal(branch_id: str, payload: dict, db: Session = Depends(get_db
         "assigned_user_id": user_id,
         "contact_person_name": user_name,
     }
+
+
+@router.get("/{branch_id}/programmes")
+def get_branch_programmes(branch_id: str, db: Session = Depends(get_db_session)):
+    params = {"tenant_id": DEFAULT_TENANT_ID}
+    branch_filter_sql = ""
+
+    if branch_id and branch_id != "ALL":
+        try:
+            branch_uuid = uuid.UUID(branch_id)
+            branch_filter_sql = "AND b.branch_id = :branch_uuid"
+            params["branch_uuid"] = branch_uuid
+        except ValueError:
+            pass
+
+    query = text(f"""
+        SELECT DISTINCT
+            p.id,
+            p.programme_code AS code,
+            p.programme_name AS name,
+            p.coaching_track,
+            COALESCE(p.metadata->>'yearLevel', 'First Year') AS year_level,
+            COALESCE(p.metadata->'subjectIds', '[]'::jsonb) AS subject_ids
+        FROM sms_batches b
+        JOIN sms_academic_programmes p
+            ON p.tenant_id = b.tenant_id
+            AND p.id = b.programme_id
+        WHERE b.tenant_id = :tenant_id
+            {branch_filter_sql}
+            AND b.status = 'ACTIVE'
+            AND p.status = 'ACTIVE'
+        ORDER BY p.programme_code
+    """)
+    rows = db.execute(query, params).fetchall()
+
+    return [
+        {
+            "id": str(r.id),
+            "code": r.code,
+            "name": r.name,
+            "coachingTrack": r.coaching_track,
+            "yearLevel": r.year_level,
+            "subjectIds": r.subject_ids or [],
+        }
+        for r in rows
+    ]
+
+
+@router.post("/{branch_id}/programmes")
+def assign_branch_programmes(branch_id: str, payload: dict, db: Session = Depends(get_db_session)):
+    tenant_id_uuid = DEFAULT_TENANT_ID
+    user_id_uuid = DEFAULT_USER_ID
+
+    try:
+        branch_id_uuid = uuid.UUID(branch_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid branch_id UUID")
+
+    programme_ids = payload.get("programme_ids") or payload.get("programmeIds") or []
+
+    try:
+        # Get active default academic year, or create default 2026-2027 if none exists
+        ay_res = db.execute(
+            text("SELECT id FROM sms_academic_years WHERE tenant_id = :tenant_id AND status = 'ACTIVE' ORDER BY is_default DESC LIMIT 1"),
+            {"tenant_id": tenant_id_uuid},
+        ).fetchone()
+
+        if not ay_res:
+            ay_id_uuid = uuid.uuid4()
+            db.execute(
+                text("""
+                    INSERT INTO sms_academic_years (
+                        id, tenant_id, code, name, starts_on, ends_on, status, is_default, created_by, created_at, updated_at
+                    )
+                    VALUES (
+                        :id, :tenant_id, '2026-27', '2026-2027', '2026-06-01', '2027-04-30', 'ACTIVE', true, :user_id, NOW(), NOW()
+                    )
+                """),
+                {"id": ay_id_uuid, "tenant_id": tenant_id_uuid, "user_id": user_id_uuid},
+            )
+        else:
+            ay_id_uuid = ay_res.id
+
+        branch_hex = branch_id_uuid.hex[:4].upper()
+
+        # Collect valid selected programme UUIDs
+        selected_prog_uuids = []
+        for p_str in programme_ids:
+            try:
+                selected_prog_uuids.append(uuid.UUID(p_str))
+            except ValueError:
+                pass
+
+        # Fetch existing batches for this branch and academic year to handle deactivations cleanly
+        existing_batches = db.execute(
+            text("""
+                SELECT id, programme_id, status FROM sms_batches
+                WHERE tenant_id = :tenant_id AND branch_id = :branch_id AND academic_year_id = :ay_id
+            """),
+            {
+                "tenant_id": tenant_id_uuid,
+                "branch_id": branch_id_uuid,
+                "ay_id": ay_id_uuid,
+            },
+        ).fetchall()
+
+        selected_prog_set = set(selected_prog_uuids)
+
+        # Deactivate batches for programmes that are NOT in user selection (with active enrollment protection)
+        for b in existing_batches:
+            if b.programme_id not in selected_prog_set and b.status != "INACTIVE":
+                student_count = db.execute(
+                    text("SELECT COUNT(*) FROM sms_enrollments WHERE batch_id = :batch_id AND status = 'ACTIVE'"),
+                    {"batch_id": b.id},
+                ).scalar() or 0
+
+                if student_count > 0:
+                    prog_info = db.execute(
+                        text("SELECT programme_name FROM sms_academic_programmes WHERE id = :id"),
+                        {"id": b.programme_id},
+                    ).fetchone()
+                    prog_name = prog_info.programme_name if prog_info else "Selected stream"
+                    db.rollback()
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Cannot remove '{prog_name}' offering. {student_count} active students are currently enrolled in this stream for the active academic term.",
+                    )
+
+                db.execute(
+                    text("UPDATE sms_batches SET status = 'INACTIVE', updated_at = NOW() WHERE id = :id"),
+                    {"id": b.id},
+                )
+
+        for prog_id_uuid in selected_prog_uuids:
+            prog_res = db.execute(
+                text("SELECT programme_code, programme_name FROM sms_academic_programmes WHERE id = :prog_id AND tenant_id = :tenant_id"),
+                {"prog_id": prog_id_uuid, "tenant_id": tenant_id_uuid},
+            ).fetchone()
+            if not prog_res:
+                continue
+
+            prog_code = prog_res.programme_code
+            prog_name = prog_res.programme_name
+
+            for yr_level, yr_name, yr_code in [("1", "First Year", "FY"), ("2", "Second Year", "SY")]:
+                batch_code = f"{prog_code}-{branch_hex}-{yr_code}"
+                batch_name = f"{prog_code} {yr_name} ({branch_hex})"
+
+                existing_batch = db.execute(
+                    text("""
+                        SELECT id FROM sms_batches
+                        WHERE tenant_id = :tenant_id AND branch_id = :branch_id
+                            AND academic_year_id = :ay_id 
+                            AND (programme_id = :prog_id OR batch_code = :code)
+                            AND year_level = :yr_level
+                    """),
+                    {
+                        "tenant_id": tenant_id_uuid,
+                        "branch_id": branch_id_uuid,
+                        "ay_id": ay_id_uuid,
+                        "prog_id": prog_id_uuid,
+                        "code": batch_code,
+                        "yr_level": yr_level,
+                    },
+                ).fetchone()
+
+                if existing_batch:
+                    batch_id_uuid = existing_batch.id
+                    db.execute(
+                        text("UPDATE sms_batches SET status = 'ACTIVE', programme_id = :prog_id, updated_at = NOW() WHERE id = :id"),
+                        {"id": batch_id_uuid, "prog_id": prog_id_uuid},
+                    )
+                else:
+                    batch_id_uuid = uuid.uuid4()
+                    db.execute(
+                        text("""
+                            INSERT INTO sms_batches (
+                                id, tenant_id, branch_id, academic_year_id, programme_id,
+                                batch_code, batch_name, year_level, status, created_by, created_at, updated_at
+                            )
+                            VALUES (
+                                :id, :tenant_id, :branch_id, :ay_id, :prog_id,
+                                :code, :name, :yr_level, 'ACTIVE', :user_id, NOW(), NOW()
+                            )
+                        """),
+                        {
+                            "id": batch_id_uuid,
+                            "tenant_id": tenant_id_uuid,
+                            "branch_id": branch_id_uuid,
+                            "ay_id": ay_id_uuid,
+                            "prog_id": prog_id_uuid,
+                            "code": batch_code,
+                            "name": batch_name,
+                            "yr_level": yr_level,
+                            "user_id": user_id_uuid,
+                        },
+                    )
+
+                # Ensure default section A exists for this batch
+                sec_code = f"{prog_code}-{yr_level}A-{branch_hex}"
+                sec_name = f"{prog_code}-{yr_level}A"
+                existing_section = db.execute(
+                    text("""
+                        SELECT id FROM sms_sections
+                        WHERE tenant_id = :tenant_id AND branch_id = :branch_id
+                            AND (batch_id = :batch_id OR section_code = :sec_code)
+                    """),
+                    {
+                        "tenant_id": tenant_id_uuid,
+                        "branch_id": branch_id_uuid,
+                        "batch_id": batch_id_uuid,
+                        "sec_code": sec_code,
+                    },
+                ).fetchone()
+
+                if not existing_section:
+                    sec_id_uuid = uuid.uuid4()
+                    db.execute(
+                        text("""
+                            INSERT INTO sms_sections (
+                                id, tenant_id, branch_id, batch_id, section_code, section_name,
+                                status, created_by, created_at, updated_at
+                            )
+                            VALUES (
+                                :id, :tenant_id, :branch_id, :batch_id, :sec_code, :sec_name,
+                                'ACTIVE', :user_id, NOW(), NOW()
+                            )
+                        """),
+                        {
+                            "id": sec_id_uuid,
+                            "tenant_id": tenant_id_uuid,
+                            "branch_id": branch_id_uuid,
+                            "batch_id": batch_id_uuid,
+                            "sec_code": sec_code,
+                            "sec_name": sec_name,
+                            "user_id": user_id_uuid,
+                        },
+                    )
+
+        db.commit()
+        return {"status": "success", "message": "Branch programme offerings and batches created successfully."}
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to assign branch programmes: {str(exc)}",
+        ) from exc
+
+
+@router.get("/{branch_id}/sections")
+def get_branch_sections(
+    branch_id: str,
+    exam_id: str | None = None,
+    db: Session = Depends(get_db_session),
+):
+    tenant_id_uuid = DEFAULT_TENANT_ID
+
+    try:
+        branch_id_uuid = uuid.UUID(branch_id)
+    except ValueError:
+        return []
+
+    exam_id_uuid = None
+    allowed_prog_ids: list[str] = []
+    stream_codes: list[str] = []
+
+    if exam_id:
+        try:
+            exam_id_uuid = uuid.UUID(exam_id)
+            exam_row = db.execute(
+                text("SELECT programme_id, programme_ids FROM sms_exams WHERE id = :exam_id"),
+                {"exam_id": exam_id_uuid},
+            ).fetchone()
+
+            if exam_row:
+                p_ids = exam_row.programme_ids if isinstance(exam_row.programme_ids, list) else []
+                if not p_ids and exam_row.programme_id:
+                    p_ids = [str(exam_row.programme_id)]
+                allowed_prog_ids = [str(pid) for pid in p_ids if pid]
+
+            if allowed_prog_ids:
+                progs = db.execute(
+                    text("SELECT programme_code, stream_code FROM sms_academic_programmes WHERE id::text = ANY(CAST(:p_ids AS text[]))"),
+                    {"p_ids": allowed_prog_ids},
+                ).fetchall()
+                for pr in progs:
+                    if pr.stream_code:
+                        stream_codes.append(pr.stream_code.upper())
+                    if pr.programme_code:
+                        stream_codes.append(pr.programme_code.upper())
+        except ValueError:
+            pass
+
+    has_filter = len(allowed_prog_ids) > 0
+
+    query = text("""
+        SELECT
+            s.id,
+            s.section_code AS code,
+            s.section_name AS name,
+            s.status AS section_status,
+            COALESCE(COUNT(DISTINCT e.id), 0) AS student_count,
+            COALESCE(COUNT(DISTINCT CASE WHEN r.id IS NOT NULL AND r.subject_marks IS NOT NULL AND r.subject_marks <> '{}'::jsonb THEN r.student_id END), 0) AS entered_count,
+            COALESCE(MAX(r.status), 'PENDING') AS exam_status
+        FROM sms_sections s
+        LEFT JOIN sms_batches b ON b.id = s.batch_id
+        LEFT JOIN sms_enrollments e
+            ON e.section_id = s.id AND e.status = 'ACTIVE'
+        LEFT JOIN sms_student_exam_records r
+            ON r.section_id = s.id
+            AND r.exam_id = CAST(:exam_id AS uuid)
+        WHERE s.tenant_id = :tenant_id
+            AND s.branch_id = :branch_id
+            AND s.status = 'ACTIVE'
+            AND (
+                :has_filter = false OR
+                (b.programme_id::text = ANY(CAST(:allowed_prog_ids AS text[]))) OR
+                (EXISTS (SELECT 1 FROM unnest(CAST(:stream_codes AS text[])) code WHERE s.section_name ILIKE code || '-%' OR s.section_name ILIKE code || '%'))
+            )
+        GROUP BY s.id, s.section_code, s.section_name, s.status
+        ORDER BY s.section_code
+    """)
+
+    rows = db.execute(
+        query,
+        {
+            "tenant_id": tenant_id_uuid,
+            "branch_id": branch_id_uuid,
+            "exam_id": exam_id_uuid,
+            "has_filter": has_filter,
+            "allowed_prog_ids": allowed_prog_ids if allowed_prog_ids else [""],
+            "stream_codes": stream_codes if stream_codes else [""],
+        },
+    ).fetchall()
+
+    return [
+        {
+            "id": str(r.id),
+            "name": r.name,
+            "code": r.code,
+            "status": "EXEMPTED" if r.student_count == 0 else (r.exam_status or "PENDING"),
+            "studentCount": r.student_count,
+            "enteredCount": r.entered_count if r.student_count > 0 else 0,
+        }
+        for r in rows
+    ]
