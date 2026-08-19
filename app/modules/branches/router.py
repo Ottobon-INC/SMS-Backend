@@ -11,15 +11,18 @@ from sqlalchemy.orm import Session
 
 from app.core.database.session import get_db_session
 
-router = APIRouter(prefix="/branches", tags=["branches"])
+from uuid import UUID
+from app.core.security.dependencies import resolve_tenant_id, resolve_user_id
 
-DEFAULT_TENANT_ID = "e0bb112a-1da7-44e2-8988-a90dc7b5cca5"
-DEFAULT_USER_ID = "842021d3-9826-4c4f-ad83-504be45d4520"
+router = APIRouter(prefix="/branches", tags=["branches"])
 
 
 @router.get("")
 @router.get("/")
-def get_branches(db: Session = Depends(get_db_session)):
+def get_branches(
+    tenant_id: UUID = Depends(resolve_tenant_id),
+    db: Session = Depends(get_db_session),
+):
     query = text("""
         SELECT
             id,
@@ -34,7 +37,8 @@ def get_branches(db: Session = Depends(get_db_session)):
         WHERE tenant_id = :tenant_id AND status != 'INACTIVE'
         ORDER BY created_at DESC
     """)
-    rows = db.execute(query, {"tenant_id": DEFAULT_TENANT_ID}).fetchall()
+    rows = db.execute(query, {"tenant_id": str(tenant_id)}).fetchall()
+
 
     if not rows:
         return [
@@ -57,13 +61,31 @@ def get_branches(db: Session = Depends(get_db_session)):
                     "phone": "+91 98765 00001",
                     "email": "main@devcollege.edu",
                 },
-                "contact_person": "Pramod Dean",
-                "principalName": "Pramod Dean",
+                "contact_person": "Not Assigned",
+                "principalName": "Not Assigned",
             }
         ]
 
-    return [
-        {
+    res_list = []
+    for r in rows:
+        c_data = r.contact_data if isinstance(r.contact_data, dict) else json.loads(r.contact_data or "{}")
+
+        # Query active user assignment from sms_user_access_assignments
+        assign_row = db.execute(
+            text("""
+                SELECT u.id AS user_id, u.full_name
+                FROM sms_user_access_assignments a
+                JOIN sms_users u ON u.id = a.user_id
+                WHERE a.branch_id = :b_id AND a.status = 'ACTIVE' AND a.is_primary = true
+                LIMIT 1
+            """),
+            {"b_id": r.id},
+        ).fetchone()
+
+        p_id = str(assign_row.user_id) if assign_row else None
+        p_name = assign_row.full_name if assign_row else "Not Assigned"
+
+        res_list.append({
             "id": str(r.id),
             "code": r.branch_code,
             "name": r.display_name,
@@ -73,33 +95,51 @@ def get_branches(db: Session = Depends(get_db_session)):
             "legal_name": r.legal_name or r.display_name,
             "status": r.status,
             "address": r.address_data if isinstance(r.address_data, dict) else json.loads(r.address_data or "{}"),
-            "contact": r.contact_data if isinstance(r.contact_data, dict) else json.loads(r.contact_data or "{}"),
-            "contact_person": "Pramod Dean",
-            "principalName": "Pramod Dean",
-        }
-        for r in rows
-    ]
+            "contact": c_data,
+            "contact_person": p_name,
+            "principalName": p_name,
+            "principal_user_id": p_id,
+        })
+
+    return res_list
+
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
 @router.post("/", status_code=status.HTTP_201_CREATED)
-def create_branch(payload: dict, db: Session = Depends(get_db_session)):
+@router.post("")
+@router.post("/")
+def create_branch(
+    payload: dict,
+    tenant_id: UUID = Depends(resolve_tenant_id),
+    user_id: UUID = Depends(resolve_user_id),
+    db: Session = Depends(get_db_session),
+):
     user_role = payload.get("user_role") or payload.get("role") or ""
     if user_role == "BRANCH_ADMIN":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Branch creation is restricted to Institution Administrators (Deans). Principals cannot create campus branches.",
         )
+    tenant_id_str = str(tenant_id)
+    user_id_str = str(user_id)
     branch_id = payload.get("id") or str(uuid.uuid4())
-    code = payload.get("branchCode") or payload.get("code") or f"B-{uuid.uuid4().hex[:4].upper()}"
-    display_name = payload.get("displayName") or payload.get("name") or "New Campus"
-    legal_name = payload.get("legalName") or display_name
-    address = payload.get("address") or {}
-    contact = payload.get("contact") or {}
-    contact_person = payload.get("contactPersonName") or payload.get("contact_person") or "Pramod Dean"
+    code = payload.get("code") or payload.get("branchCode") or "BRANCH"
+    display_name = payload.get("name") or payload.get("displayName") or "New Branch Campus"
+    legal_name = payload.get("legalName") or payload.get("legal_name") or f"{display_name} Ltd"
+    address = payload.get("address") or {
+        "line1": "123 College Rd",
+        "city": "Hyderabad",
+        "state": "Telangana",
+        "pincode": "500001",
+    }
+    contact_person = payload.get("contact_person") or payload.get("principalName") or "Not Assigned"
 
-    if isinstance(contact, dict):
-        contact["contact_person_name"] = contact_person
+    contact = payload.get("contact") or {
+        "phone": "+91 98765 00002",
+        "email": "branch@devcollege.edu",
+        "contact_person_name": contact_person,
+    }
 
     query = text("""
         INSERT INTO sms_branches (
@@ -118,8 +158,8 @@ def create_branch(payload: dict, db: Session = Depends(get_db_session)):
         query,
         {
             "id": branch_id,
-            "tenant_id": DEFAULT_TENANT_ID,
-            "user_id": DEFAULT_USER_ID,
+            "tenant_id": tenant_id_str,
+            "user_id": user_id_str,
             "code": code,
             "display_name": display_name,
             "legal_name": legal_name,
@@ -146,12 +186,30 @@ def create_branch(payload: dict, db: Session = Depends(get_db_session)):
 
 
 @router.post("/{branch_id}/assign-principal")
-def assign_principal(branch_id: str, payload: dict, db: Session = Depends(get_db_session)):
+def assign_principal(
+    branch_id: str,
+    payload: dict,
+    tenant_id: UUID = Depends(resolve_tenant_id),
+    db: Session = Depends(get_db_session),
+):
+    tenant_id_str = str(tenant_id)
     user_id = payload.get("user_id") or payload.get("principal_user_id")
     user_name = payload.get("user_name") or payload.get("contact_person_name") or "Assigned Principal"
 
     if not user_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="user_id is required")
+
+    clear_old_branches = text("""
+        UPDATE sms_branches
+        SET contact_data = contact_data - 'contact_person_name' - 'contact_person',
+            updated_at = NOW()
+        WHERE tenant_id = :tenant_id
+          AND id IN (
+              SELECT branch_id FROM sms_user_access_assignments WHERE user_id = :user_id
+          )
+          AND id != :branch_id
+    """)
+    db.execute(clear_old_branches, {"tenant_id": tenant_id_str, "user_id": user_id, "branch_id": branch_id})
 
     deactivate_query = text("""
         UPDATE sms_user_access_assignments
@@ -163,10 +221,10 @@ def assign_principal(branch_id: str, payload: dict, db: Session = Depends(get_db
     assign_id = str(uuid.uuid4())
     insert_query = text("""
         INSERT INTO sms_user_access_assignments (
-            id, tenant_id, user_id, role_id, branch_id, scope_type, is_primary, status, valid_from, created_at, updated_at
+            id, tenant_id, user_id, role_id, branch_id, scope_type, is_primary, status, assigned_by, valid_from, created_at, updated_at
         )
         SELECT
-            :id, :tenant_id, :user_id, r.id, :branch_id, 'BRANCH', true, 'ACTIVE', NOW(), NOW(), NOW()
+            :id, :tenant_id, :user_id, r.id, :branch_id, 'BRANCH', true, 'ACTIVE', :assigned_by, NOW(), NOW(), NOW()
         FROM sms_roles r
         WHERE r.role_code = 'BRANCH_ADMIN'
         LIMIT 1
@@ -175,9 +233,10 @@ def assign_principal(branch_id: str, payload: dict, db: Session = Depends(get_db
         insert_query,
         {
             "id": assign_id,
-            "tenant_id": DEFAULT_TENANT_ID,
+            "tenant_id": tenant_id_str,
             "user_id": user_id,
             "branch_id": branch_id,
+            "assigned_by": user_id,
         },
     )
 
@@ -186,13 +245,16 @@ def assign_principal(branch_id: str, payload: dict, db: Session = Depends(get_db
         SET contact_data = jsonb_set(
             COALESCE(contact_data, '{}'::jsonb),
             '{contact_person_name}',
-            to_jsonb(:user_name::text)
+            to_jsonb(CAST(:user_name AS text))
         ),
         updated_at = NOW()
         WHERE id = :branch_id AND tenant_id = :tenant_id
     """)
-    db.execute(update_branch, {"branch_id": branch_id, "tenant_id": DEFAULT_TENANT_ID, "user_name": user_name})
+    db.execute(update_branch, {"branch_id": branch_id, "tenant_id": tenant_id_str, "user_name": user_name})
     db.commit()
+
+
+
 
     return {
         "status": "success",
@@ -203,8 +265,13 @@ def assign_principal(branch_id: str, payload: dict, db: Session = Depends(get_db
 
 
 @router.get("/{branch_id}/programmes")
-def get_branch_programmes(branch_id: str, db: Session = Depends(get_db_session)):
-    params = {"tenant_id": DEFAULT_TENANT_ID}
+def get_branch_programmes(
+    branch_id: str,
+    tenant_id: UUID = Depends(resolve_tenant_id),
+    db: Session = Depends(get_db_session),
+):
+    params = {"tenant_id": str(tenant_id)}
+
     branch_filter_sql = ""
 
     if branch_id and branch_id != "ALL":
@@ -249,9 +316,16 @@ def get_branch_programmes(branch_id: str, db: Session = Depends(get_db_session))
 
 
 @router.post("/{branch_id}/programmes")
-def assign_branch_programmes(branch_id: str, payload: dict, db: Session = Depends(get_db_session)):
-    tenant_id_uuid = DEFAULT_TENANT_ID
-    user_id_uuid = DEFAULT_USER_ID
+def assign_branch_programmes(
+    branch_id: str,
+    payload: dict,
+    tenant_id: UUID = Depends(resolve_tenant_id),
+    user_id: UUID = Depends(resolve_user_id),
+    db: Session = Depends(get_db_session),
+):
+    tenant_id_uuid = tenant_id
+    user_id_uuid = user_id
+
 
     try:
         branch_id_uuid = uuid.UUID(branch_id)
@@ -459,9 +533,11 @@ def assign_branch_programmes(branch_id: str, payload: dict, db: Session = Depend
 def get_branch_sections(
     branch_id: str,
     exam_id: str | None = None,
+    tenant_id: UUID = Depends(resolve_tenant_id),
     db: Session = Depends(get_db_session),
 ):
-    tenant_id_uuid = DEFAULT_TENANT_ID
+    tenant_id_uuid = tenant_id
+
 
     try:
         branch_id_uuid = uuid.UUID(branch_id)

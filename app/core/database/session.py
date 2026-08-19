@@ -25,8 +25,13 @@ def get_engine() -> Engine:
             pool_pre_ping=True,
             pool_size=5,
             max_overflow=10,
+            # Disable psycopg3 server-side prepared statements.
+            # Without this, reused pooled connections cause:
+            #   psycopg.errors.InvalidSqlStatementName: prepared statement "_pg3_N" does not exist
+            connect_args={"prepare_threshold": None},
         )
     return _engine
+
 
 
 def get_session_factory() -> sessionmaker[Session]:

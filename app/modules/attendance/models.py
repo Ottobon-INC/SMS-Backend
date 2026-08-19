@@ -6,7 +6,14 @@ from typing import Any
 
 from sqlalchemy import CheckConstraint, ForeignKeyConstraint, Index, Table, UniqueConstraint
 
+import app.modules.branches.models  # noqa: F401
+import app.modules.platform_admin.models  # noqa: F401
+import app.modules.users.models  # noqa: F401
 from app.shared.models.base import Base
+
+
+
+
 from app.shared.models.foundation_columns import (
     date_col,
     text_col,

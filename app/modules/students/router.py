@@ -14,13 +14,12 @@ from sqlalchemy.orm import Session
 
 from app.core.database.session import get_db_session
 from app.core.security.context import RequestContext
-from app.core.security.dependencies import require_any_permission
+from app.core.security.dependencies import require_any_permission, resolve_tenant_id, resolve_user_id
 
 router = APIRouter(prefix="/students", tags=["students"])
 
-DEFAULT_TENANT_ID = "e0bb112a-1da7-44e2-8988-a90dc7b5cca5"
-DEFAULT_USER_ID = "842021d3-9826-4c4f-ad83-504be45d4520"
 STUDENT_UPDATE_PERMISSIONS = {"student.update_basic", "student.update_sensitive"}
+
 
 
 class StudentInlineUpdateRequest(BaseModel):
@@ -80,6 +79,7 @@ def _fetch_student_scope(db: Session, student_id: UUID, tenant_id: UUID) -> Any 
 def get_students(
     branch_id: str | None = None,
     section_id: str | None = None,
+    tenant_id: UUID = Depends(resolve_tenant_id),
     db: Session = Depends(get_db_session),
 ):
     query = text("""
@@ -87,18 +87,13 @@ def get_students(
             s.id,
             s.tenant_id,
             s.student_number,
-            s.display_name,
             s.legal_name,
+            s.display_name,
             s.gender,
             s.date_of_birth,
             s.student_mobile,
             s.student_email,
-            s.preferred_language,
             s.current_status,
-            s.source_type AS student_source_type,
-            s.source_reference AS student_source_reference,
-            s.created_at AS student_created_at,
-            s.updated_at AS student_updated_at,
             e.id AS enrollment_id,
             e.admission_number,
             e.roll_number,
@@ -106,83 +101,29 @@ def get_students(
             e.status AS enrollment_status,
             e.joining_date,
             e.ending_date,
-            e.is_current,
-            e.source_type AS enrollment_source_type,
-            e.source_reference AS enrollment_source_reference,
-            e.created_at AS enrollment_created_at,
-            e.updated_at AS enrollment_updated_at,
             b.id AS branch_id,
-            b.branch_code,
             b.display_name AS branch_name,
-            ay.id AS academic_year_id,
-            ay.code AS academic_year_code,
-            ay.name AS academic_year_name,
-            p.id AS programme_id,
-            p.programme_code,
-            p.programme_name AS stream,
-            p.stream_code,
-            p.coaching_track,
-            bt.id AS batch_id,
-            bt.batch_code,
-            bt.batch_name,
             sec.id AS section_id,
-            sec.section_code,
             sec.section_name AS section,
-            g.id AS guardian_id,
             g.full_name AS guardian_name,
             g.mobile AS guardian_phone,
-            g.email AS guardian_email,
-            g.verification_status AS guardian_verification_status,
-            g.status AS guardian_status,
-            sgl.id AS guardian_link_id,
-            sgl.relationship_type AS guardian_relationship,
-            sgl.is_primary AS guardian_is_primary,
-            sgl.portal_access_enabled,
-            sgl.notification_enabled,
-            sgl.payment_enabled,
-            sgl.verification_status AS guardian_link_verification_status,
-            sgl.status AS guardian_link_status,
-            sgl.effective_from AS guardian_link_effective_from,
-            sgl.effective_until AS guardian_link_effective_until
+            sgl.relationship_type AS guardian_relationship
+
         FROM sms_students s
         LEFT JOIN sms_enrollments e
-            ON e.tenant_id = s.tenant_id
-            AND e.student_id = s.id
-            AND e.is_current = true
-        LEFT JOIN sms_branches b
-            ON b.tenant_id = e.tenant_id
-            AND b.id = e.branch_id
-        LEFT JOIN sms_academic_years ay
-            ON ay.tenant_id = e.tenant_id
-            AND ay.id = e.academic_year_id
-        LEFT JOIN sms_academic_programmes p
-            ON p.tenant_id = e.tenant_id
-            AND p.id = e.programme_id
-        LEFT JOIN sms_batches bt
-            ON bt.tenant_id = e.tenant_id
-            AND bt.branch_id = e.branch_id
-            AND bt.id = e.batch_id
-        LEFT JOIN sms_sections sec
-            ON sec.tenant_id = e.tenant_id
-            AND sec.branch_id = e.branch_id
-            AND sec.batch_id = e.batch_id
-            AND sec.id = e.section_id
+            ON e.tenant_id = s.tenant_id AND e.student_id = s.id AND e.status = 'ACTIVE'
+        LEFT JOIN sms_branches b ON b.id = e.branch_id
+        LEFT JOIN sms_sections sec ON sec.id = e.section_id
         LEFT JOIN sms_student_guardian_links sgl
-            ON sgl.tenant_id = s.tenant_id
-            AND sgl.student_id = s.id
-            AND sgl.is_primary = true
-            AND sgl.status = 'ACTIVE'
-        LEFT JOIN sms_guardians g
-            ON g.tenant_id = sgl.tenant_id
-            AND g.id = sgl.guardian_id
-        WHERE
-            s.tenant_id = :tenant_id
+            ON sgl.tenant_id = s.tenant_id AND sgl.student_id = s.id AND sgl.is_primary = true
+        LEFT JOIN sms_guardians g ON g.id = sgl.guardian_id
+        WHERE s.tenant_id = :tenant_id
             AND s.current_status = 'ACTIVE'
             AND (CAST(:branch_id AS uuid) IS NULL OR e.branch_id = CAST(:branch_id AS uuid))
             AND (CAST(:section_id AS uuid) IS NULL OR e.section_id = CAST(:section_id AS uuid))
         ORDER BY s.created_at DESC
     """)
-    rows = db.execute(query, {"tenant_id": DEFAULT_TENANT_ID, "branch_id": branch_id, "section_id": section_id}).fetchall()
+    rows = db.execute(query, {"tenant_id": str(tenant_id), "branch_id": branch_id, "section_id": section_id}).fetchall()
 
     def to_iso(value):
         return value.isoformat() if hasattr(value, "isoformat") else value
@@ -194,70 +135,20 @@ def get_students(
             "studentNumber": r.student_number,
             "admissionNumber": r.admission_number or r.student_number or "N/A",
             "name": r.display_name or r.legal_name,
-            "displayName": r.display_name,
+            "displayName": r.display_name or r.legal_name,
             "legalName": r.legal_name,
             "rollNo": r.roll_number or "-",
             "rollNumber": r.roll_number,
             "gender": r.gender or "-",
             "dob": to_iso(r.date_of_birth),
-            "dateOfBirth": to_iso(r.date_of_birth),
             "studentMobile": r.student_mobile,
             "studentEmail": r.student_email,
-            "preferredLanguage": r.preferred_language,
-            "studentSourceType": r.student_source_type,
-            "studentSourceReference": r.student_source_reference,
-            "studentCreatedAt": to_iso(r.student_created_at),
-            "studentUpdatedAt": to_iso(r.student_updated_at),
-            "enrollmentId": str(r.enrollment_id) if r.enrollment_id else None,
             "branchId": str(r.branch_id) if r.branch_id else None,
-            "branchCode": r.branch_code,
             "branchName": r.branch_name,
-            "academicYearId": str(r.academic_year_id) if r.academic_year_id else None,
-            "academicYearCode": r.academic_year_code,
-            "academicYearName": r.academic_year_name,
-            "programmeId": str(r.programme_id) if r.programme_id else None,
-            "programmeCode": r.programme_code,
-            "programmeName": r.stream,
-            "streamCode": r.stream_code,
-            "coachingTrack": r.coaching_track,
-            "stream": r.stream or "-",
-            "batchId": str(r.batch_id) if r.batch_id else None,
-            "batchCode": r.batch_code,
-            "batchName": r.batch_name,
             "sectionId": str(r.section_id) if r.section_id else None,
-            "sectionCode": r.section_code,
             "sectionName": r.section,
             "section": r.section or "-",
-            "yearLevel": r.year_level,
-            "enrollmentStatus": r.enrollment_status,
-            "joiningDate": to_iso(r.joining_date),
-            "endingDate": to_iso(r.ending_date),
-            "isCurrent": r.is_current,
-            "enrollmentSourceType": r.enrollment_source_type,
-            "enrollmentSourceReference": r.enrollment_source_reference,
-            "enrollmentCreatedAt": to_iso(r.enrollment_created_at),
-            "enrollmentUpdatedAt": to_iso(r.enrollment_updated_at),
-            "bloodGroup": "N/A",
             "status": r.current_status,
-            "guardianId": str(r.guardian_id) if r.guardian_id else None,
-            "father_name": r.guardian_name or "N/A",
-            "guardianName": r.guardian_name,
-            "guardian_relationship": r.guardian_relationship or "GUARDIAN",
-            "guardianRelationship": r.guardian_relationship,
-            "guardian_phone": r.guardian_phone or "N/A",
-            "guardianPhone": r.guardian_phone,
-            "guardianEmail": r.guardian_email,
-            "guardianStatus": r.guardian_status,
-            "guardianVerificationStatus": r.guardian_verification_status,
-            "guardianLinkId": str(r.guardian_link_id) if r.guardian_link_id else None,
-            "guardianIsPrimary": r.guardian_is_primary,
-            "portalAccessEnabled": r.portal_access_enabled,
-            "notificationEnabled": r.notification_enabled,
-            "paymentEnabled": r.payment_enabled,
-            "guardianLinkVerificationStatus": r.guardian_link_verification_status,
-            "guardianLinkStatus": r.guardian_link_status,
-            "guardianLinkEffectiveFrom": to_iso(r.guardian_link_effective_from),
-            "guardianLinkEffectiveUntil": to_iso(r.guardian_link_effective_until),
             "guardian": {
                 "name": r.guardian_name or "Guardian Name",
                 "mobile": r.guardian_phone or "+91 98765 00000",
@@ -266,6 +157,7 @@ def get_students(
         }
         for r in rows
     ]
+
 
 
 @router.patch("/{student_id}")
@@ -401,19 +293,24 @@ def update_student_inline(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Failed to update student data: {exc}") from exc
 
 
-@router.post("", status_code=status.HTTP_201_CREATED)
-@router.post("/", status_code=status.HTTP_201_CREATED)
-def create_student(payload: dict, db: Session = Depends(get_db_session)):
+@router.post("")
+@router.post("/")
+def create_student(
+    payload: dict,
+    tenant_id: UUID = Depends(resolve_tenant_id),
+    user_id: UUID = Depends(resolve_user_id),
+    db: Session = Depends(get_db_session),
+):
     student_id = payload.get("id") or str(uuid.uuid4())
-    student_number = payload.get("admissionNumber") or f"2026-STD-{uuid.uuid4().hex[:4].upper()}"
-    name = payload.get("name") or "New Student"
+    student_number = payload.get("admissionNumber") or payload.get("student_number") or f"STU-{uuid.uuid4().hex[:8].upper()}"
+    name = payload.get("name") or payload.get("legal_name") or "New Student"
     gender = payload.get("gender") or "MALE"
     dob = payload.get("dob") or payload.get("date_of_birth") or "2008-01-01"
 
     query = text("""
         INSERT INTO sms_students (
             id, tenant_id, student_number, legal_name, display_name,
-            date_of_birth, gender, current_status, source_type, created_by, created_at, updated_at
+            date_of_birth, gender, current_status, admission_type, created_by, created_at, updated_at
         )
         VALUES (
             :id, :tenant_id, :student_number, :name, :name,
@@ -425,14 +322,15 @@ def create_student(payload: dict, db: Session = Depends(get_db_session)):
         query,
         {
             "id": student_id,
-            "tenant_id": DEFAULT_TENANT_ID,
+            "tenant_id": str(tenant_id),
             "student_number": student_number,
             "name": name,
             "dob": dob,
             "gender": gender,
-            "created_by": DEFAULT_USER_ID,
+            "created_by": str(user_id),
         },
     ).fetchone()
+
     db.commit()
 
     if res is None:

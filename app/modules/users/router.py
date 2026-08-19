@@ -13,18 +13,18 @@ from sqlalchemy.orm import Session
 
 from app.core.database.session import get_db_session
 
+from uuid import UUID
+from app.core.security.dependencies import resolve_tenant_id, resolve_user_id
+
 router = APIRouter(prefix="/users", tags=["users"])
 
-DEFAULT_TENANT_ID = "e0bb112a-1da7-44e2-8988-a90dc7b5cca5"
-DEFAULT_BRANCH_ID = "8854ab2a-44cf-4770-bb51-5f78e0876e9d"
-DEFAULT_ASSIGNED_BY = "842021d3-9826-4c4f-ad83-504be45d4520"
 
 
 @router.get("")
 @router.get("/")
 def get_users(db: Session = Depends(get_db_session)):
     query = text("""
-        SELECT
+        SELECT DISTINCT ON (LOWER(u.email))
             u.id,
             u.full_name,
             u.email,
@@ -59,8 +59,9 @@ def get_users(db: Session = Depends(get_db_session)):
         LEFT JOIN sms_tenants t ON t.id = a.tenant_id
         LEFT JOIN sms_branches b ON b.tenant_id = a.tenant_id AND b.id = a.branch_id
         WHERE u.status = 'ACTIVE'
-        ORDER BY u.created_at DESC
+        ORDER BY LOWER(u.email), u.created_at DESC
     """)
+
     rows = db.execute(query).fetchall()
     if not rows:
         return [
@@ -108,7 +109,12 @@ def get_users(db: Session = Depends(get_db_session)):
 
 @router.post("", status_code=status.HTTP_201_CREATED)
 @router.post("/", status_code=status.HTTP_201_CREATED)
-def create_user(payload: dict, db: Session = Depends(get_db_session)):
+def create_user(
+    payload: dict,
+    tenant_id: UUID = Depends(resolve_tenant_id),
+    assigned_by: UUID = Depends(resolve_user_id),
+    db: Session = Depends(get_db_session),
+):
     target_role = payload.get("role") or "OFFICE_STAFF"
     if target_role == "INSTITUTION_ADMIN":
         raise HTTPException(
@@ -121,6 +127,7 @@ def create_user(payload: dict, db: Session = Depends(get_db_session)):
     email = payload.get("email") or f"user.{_uuid.uuid4().hex[:4]}@svic.edu"
     mobile = payload.get("mobile") or "+91 98765 43210"
 
+    tenant_id_str = str(tenant_id)
     user_query = text("""
         INSERT INTO sms_users (id, tenant_id, account_category, full_name, email, mobile, status, created_at, updated_at)
         VALUES (:id, :tenant_id, 'TENANT', :full_name, :email, :mobile, 'ACTIVE', NOW(), NOW())
@@ -131,7 +138,7 @@ def create_user(payload: dict, db: Session = Depends(get_db_session)):
         user_query,
         {
             "id": user_id,
-            "tenant_id": DEFAULT_TENANT_ID,
+            "tenant_id": tenant_id_str,
             "full_name": full_name,
             "email": email,
             "mobile": mobile,
@@ -139,7 +146,11 @@ def create_user(payload: dict, db: Session = Depends(get_db_session)):
     ).fetchone()
 
     is_branch_scoped = target_role in ("BRANCH_ADMIN", "OFFICE_STAFF")
-    branch_id = payload.get("branch_id") or (DEFAULT_BRANCH_ID if is_branch_scoped else None)
+    branch_id = payload.get("branch_id")
+    if not branch_id and is_branch_scoped:
+        first_branch = db.execute(text("SELECT id FROM sms_branches WHERE tenant_id = :tenant_id AND status = 'ACTIVE' LIMIT 1"), {"tenant_id": tenant_id_str}).scalar_one_or_none()
+        branch_id = str(first_branch) if first_branch else None
+
     scope_type = "BRANCH" if is_branch_scoped else "TENANT"
 
     role_lookup = db.execute(
@@ -164,14 +175,15 @@ def create_user(payload: dict, db: Session = Depends(get_db_session)):
             assignment_query,
             {
                 "id": str(_uuid.uuid4()),
-                "tenant_id": DEFAULT_TENANT_ID,
+                "tenant_id": tenant_id_str,
                 "user_id": str(res.id),
                 "role_id": role_id,
                 "branch_id": branch_id,
                 "scope_type": scope_type,
-                "assigned_by": DEFAULT_ASSIGNED_BY,
+                "assigned_by": str(assigned_by),
             },
         )
+
 
     db.commit()
 

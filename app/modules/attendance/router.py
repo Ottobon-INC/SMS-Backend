@@ -129,9 +129,12 @@ def submit_session(
     )
 
 
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+
 @router.post("/{session_id}/finalize", response_model=schemas.AttendanceSessionResponse)
 def finalize_session(
     session_id: UUID,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db_session),
     context: RequestContext = Depends(require_branch_scope),
     _: RequestContext = Depends(require_any_permission({"attendance.finalize"})),
@@ -145,4 +148,5 @@ def finalize_session(
         tenant_id=context.tenant_id,
         branch_id=context.branch_id,
         user_id=context.app_user_id,
+        background_tasks=background_tasks,
     )

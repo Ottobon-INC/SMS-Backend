@@ -14,20 +14,23 @@ from sqlalchemy.orm import Session
 
 from app.core.database.session import get_db_session
 
+from app.core.security.dependencies import resolve_tenant_id, resolve_user_id
+
 router = APIRouter(prefix="/academic-structure", tags=["academic_structure"])
 
-DEFAULT_TENANT_ID = UUID("e0bb112a-1da7-44e2-8988-a90dc7b5cca5")
-DEFAULT_USER_ID = UUID("842021d3-9826-4c4f-ad83-504be45d4520")
-
 @router.get("/academic-years")
-def get_academic_years(db: Session = Depends(get_db_session)):
+def get_academic_years(
+    tenant_id: UUID = Depends(resolve_tenant_id),
+    db: Session = Depends(get_db_session),
+):
     query = text("""
         SELECT id, code, name, starts_on, ends_on, status, is_default
         FROM sms_academic_years
         WHERE tenant_id = :tenant_id AND status = 'ACTIVE'
         ORDER BY is_default DESC, starts_on DESC
     """)
-    rows = db.execute(query, {"tenant_id": DEFAULT_TENANT_ID}).fetchall()
+    rows = db.execute(query, {"tenant_id": tenant_id}).fetchall()
+
     return [
         {
             "id": str(r.id),
@@ -42,9 +45,15 @@ def get_academic_years(db: Session = Depends(get_db_session)):
     ]
 
 @router.post("/academic-years")
-def create_academic_year(payload: dict, db: Session = Depends(get_db_session)):
-    tenant_id = str(DEFAULT_TENANT_ID)
-    user_id = str(DEFAULT_USER_ID)
+def create_academic_year(
+    payload: dict,
+    tenant_id: UUID = Depends(resolve_tenant_id),
+    user_id: UUID = Depends(resolve_user_id),
+    db: Session = Depends(get_db_session),
+):
+    tenant_id_str = str(tenant_id)
+    user_id_str = str(user_id)
+
     ay_id = payload.get("id") or str(uuid.uuid4())
     name = payload.get("name") or "2026-2027"
     code = payload.get("code") or (name.replace("20", "") if len(name) == 9 else name)
@@ -55,7 +64,7 @@ def create_academic_year(payload: dict, db: Session = Depends(get_db_session)):
     if is_default:
         db.execute(
             text("UPDATE sms_academic_years SET is_default = false WHERE tenant_id = :tenant_id"),
-            {"tenant_id": tenant_id},
+            {"tenant_id": tenant_id_str},
         )
 
     query = text("""
@@ -71,15 +80,16 @@ def create_academic_year(payload: dict, db: Session = Depends(get_db_session)):
         query,
         {
             "id": ay_id,
-            "tenant_id": tenant_id,
+            "tenant_id": tenant_id_str,
             "code": code,
             "name": name,
             "starts_on": starts_on,
             "ends_on": ends_on,
             "is_default": is_default,
-            "created_by": user_id,
+            "created_by": user_id_str,
         },
     ).fetchone()
+
     db.commit()
 
     return {
@@ -93,22 +103,30 @@ def create_academic_year(payload: dict, db: Session = Depends(get_db_session)):
     }
 
 @router.patch("/academic-years/{ay_id}/default")
-def set_default_academic_year(ay_id: UUID, db: Session = Depends(get_db_session)):
-    tenant_id = str(DEFAULT_TENANT_ID)
+def set_default_academic_year(
+    ay_id: UUID,
+    tenant_id: UUID = Depends(resolve_tenant_id),
+    db: Session = Depends(get_db_session),
+):
+    tenant_id_str = str(tenant_id)
     db.execute(
         text("UPDATE sms_academic_years SET is_default = false WHERE tenant_id = :tenant_id"),
-        {"tenant_id": tenant_id},
+        {"tenant_id": tenant_id_str},
     )
     db.execute(
         text("UPDATE sms_academic_years SET is_default = true, updated_at = NOW() WHERE id = :ay_id AND tenant_id = :tenant_id"),
-        {"ay_id": ay_id, "tenant_id": tenant_id},
+        {"ay_id": ay_id, "tenant_id": tenant_id_str},
     )
+
     db.commit()
     return {"status": "ok", "message": f"Academic year {ay_id} set as default."}
 
 
 @router.get("/subjects")
-def get_subjects(db: Session = Depends(get_db_session)):
+def get_subjects(
+    tenant_id: UUID = Depends(resolve_tenant_id),
+    db: Session = Depends(get_db_session),
+):
     query = text("""
         SELECT
             id,
@@ -121,7 +139,8 @@ def get_subjects(db: Session = Depends(get_db_session)):
         WHERE tenant_id = :tenant_id AND status = 'ACTIVE'
         ORDER BY subject_code
     """)
-    rows = db.execute(query, {"tenant_id": DEFAULT_TENANT_ID}).fetchall()
+    rows = db.execute(query, {"tenant_id": tenant_id}).fetchall()
+
     return [
         {
             "id": str(r.id),
@@ -135,9 +154,15 @@ def get_subjects(db: Session = Depends(get_db_session)):
     ]
 
 @router.post("/subjects")
-def create_subject(payload: dict, db: Session = Depends(get_db_session)):
-    tenant_id = str(DEFAULT_TENANT_ID)
-    user_id = str(DEFAULT_USER_ID)
+def create_subject(
+    payload: dict,
+    tenant_id: UUID = Depends(resolve_tenant_id),
+    user_id: UUID = Depends(resolve_user_id),
+    db: Session = Depends(get_db_session),
+):
+    tenant_id_str = str(tenant_id)
+    user_id_str = str(user_id)
+
     sub_id = payload.get("id") or str(uuid.uuid4())
     code = payload.get("code") or "SUB-101"
     name = payload.get("name") or "New Subject"
@@ -167,15 +192,16 @@ def create_subject(payload: dict, db: Session = Depends(get_db_session)):
         query,
         {
             "id": sub_id,
-            "tenant_id": tenant_id,
+            "tenant_id": tenant_id_str,
             "code": code,
             "name": name,
             "subject_type": subject_type,
             "max_marks": max_marks,
             "pass_marks": pass_marks,
-            "created_by": user_id,
+            "created_by": user_id_str,
         },
     ).fetchone()
+
     db.commit()
     return {
         "id": str(res.id),
@@ -187,7 +213,10 @@ def create_subject(payload: dict, db: Session = Depends(get_db_session)):
     }
 
 @router.get("/programmes")
-def get_programmes(db: Session = Depends(get_db_session)):
+def get_programmes(
+    tenant_id: UUID = Depends(resolve_tenant_id),
+    db: Session = Depends(get_db_session),
+):
     query = text("""
         SELECT
             id,
@@ -200,7 +229,8 @@ def get_programmes(db: Session = Depends(get_db_session)):
         WHERE tenant_id = :tenant_id AND status = 'ACTIVE'
         ORDER BY programme_code
     """)
-    rows = db.execute(query, {"tenant_id": DEFAULT_TENANT_ID}).fetchall()
+    rows = db.execute(query, {"tenant_id": tenant_id}).fetchall()
+
     return [
         {
             "id": str(r.id),
@@ -214,15 +244,22 @@ def get_programmes(db: Session = Depends(get_db_session)):
     ]
 
 @router.post("/programmes")
-def create_programme(payload: dict, db: Session = Depends(get_db_session)):
-    tenant_id = str(DEFAULT_TENANT_ID)
-    user_id = str(DEFAULT_USER_ID)
+def create_programme(
+    payload: dict,
+    tenant_id: UUID = Depends(resolve_tenant_id),
+    user_id: UUID = Depends(resolve_user_id),
+    db: Session = Depends(get_db_session),
+):
+    tenant_id_str = str(tenant_id)
+    user_id_str = str(user_id)
+
     prog_id = payload.get("id") or str(uuid.uuid4())
     code = payload.get("code") or "STREAM"
     name = payload.get("name") or "Course Stream"
     coaching_track = payload.get("coachingTrack")
     year_level = payload.get("yearLevel") or "First Year"
     subject_ids = payload.get("subjectIds") or []
+    metadata_json = json.dumps({"yearLevel": year_level, "subjectIds": subject_ids})
 
     query = text("""
         INSERT INTO sms_academic_programmes (
@@ -233,7 +270,7 @@ def create_programme(payload: dict, db: Session = Depends(get_db_session)):
         VALUES (
             :id, :tenant_id, :code, :name, :code,
             :coaching_track, 2, 'ACTIVE',
-            jsonb_build_object('yearLevel', :year_level, 'subjectIds', CAST(:subject_ids AS jsonb)),
+            CAST(:metadata AS jsonb),
             :created_by, NOW(), NOW()
         )
         RETURNING
@@ -248,15 +285,16 @@ def create_programme(payload: dict, db: Session = Depends(get_db_session)):
         query,
         {
             "id": prog_id,
-            "tenant_id": tenant_id,
+            "tenant_id": tenant_id_str,
             "code": code,
             "name": name,
             "coaching_track": coaching_track,
-            "year_level": year_level,
-            "subject_ids": json.dumps(subject_ids),
-            "created_by": user_id,
+            "metadata": metadata_json,
+            "created_by": user_id_str,
         },
     ).fetchone()
+
+
     db.commit()
     return {
         "id": str(res.id),

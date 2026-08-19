@@ -232,7 +232,9 @@ class FeeService:
         app_user_id: UUID,
         account_id: UUID,
         payload: FeePaymentCreateRequest,
+        background_tasks: Any | None = None,
     ) -> FeePaymentPostResponse:
+
         account = self.repository.get_fee_account_for_payment(
             tenant_id=tenant_id,
             branch_id=branch_id,
@@ -315,6 +317,27 @@ class FeeService:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Payment posted but fee account could not be loaded.",
             )
+
+        if background_tasks:
+            try:
+                from app.modules.notifications.service import WhatsAppNotificationService
+                notif_svc = WhatsAppNotificationService(self.repository.session)
+                notif_svc.send_fee_receipt_notification(
+                    payment_id=ledger_entry_id,
+                    student_id=account["student_id"],
+                    amount_paid=float(payload.amount),
+                    receipt_no=receipt_number,
+                    payment_mode=payload.payment_mode,
+                    remaining_balance=float(new_outstanding),
+                    payment_period_label=payload.payment_period_label,
+                    tenant_id=tenant_id,
+                    branch_id=account["branch_id"],
+                    background_tasks=background_tasks,
+                )
+            except Exception as notif_err:
+                print(f"Fee receipt notification trigger warning: {notif_err}")
+
+
         return FeePaymentPostResponse(
             fee_account=FeeAccountListItem(
                 **row,
