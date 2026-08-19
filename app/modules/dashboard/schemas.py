@@ -107,3 +107,20 @@ class OfficeStaffDashboardResponse(BaseModel):
     fees: DashboardFeeSummary
     imports: DashboardImportSummary
     examinations: DashboardExamSummary
+
+class DashboardBranchSummary(BaseModel):
+    """Key metrics for a specific branch."""
+
+    branch_id: UUID
+    branch_name: str
+    active_students: int
+    sessions_today: int
+    sections_without_session: int
+    fee_outstanding: Decimal
+
+
+class InstitutionDashboardResponse(OfficeStaffDashboardResponse):
+    """Complete response consumed by the Institution/Dean dashboard."""
+    
+    branch_summaries: list[DashboardBranchSummary] = Field(default_factory=list)
+

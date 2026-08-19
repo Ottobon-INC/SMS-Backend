@@ -129,6 +129,27 @@ def submit_session(
     )
 
 
+@router.post("/{session_id}/return", response_model=schemas.AttendanceSessionResponse)
+def return_session_for_revision(
+    session_id: UUID,
+    payload: schemas.ReturnAttendancePayload,
+    db: Session = Depends(get_db_session),
+    context: RequestContext = Depends(require_branch_scope),
+    _: RequestContext = Depends(require_any_permission({"attendance.finalize"})),
+) -> schemas.AttendanceSessionResponse:
+    """Return a submitted attendance session for revision."""
+    assert context.tenant_id is not None
+    assert context.branch_id is not None
+    return service.return_session_for_revision(
+        db=db,
+        session_id=session_id,
+        tenant_id=context.tenant_id,
+        branch_id=context.branch_id,
+        user_id=context.app_user_id,
+        reason=payload.reason,
+    )
+
+
 @router.post("/{session_id}/finalize", response_model=schemas.AttendanceSessionResponse)
 def finalize_session(
     session_id: UUID,

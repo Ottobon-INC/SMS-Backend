@@ -11,6 +11,8 @@ from sqlalchemy.orm import Session
 from app.modules.academic_structure.models import Batch, Section
 from app.modules.attendance import repository, schemas
 from app.modules.attendance.models import AttendanceRecord, AttendanceSession
+from app.modules.audit.models import AuditEvent
+from uuid import uuid4
 
 
 def _get_section_or_404(db: Session, section_id: UUID, tenant_id: UUID, branch_id: UUID) -> Section:
@@ -236,6 +238,52 @@ def submit_session(
         user_id,
         datetime.now(timezone.utc),
     )
+    db.commit()
+    return _build_session_response(db, session)
+
+
+def return_session_for_revision(
+    db: Session,
+    session_id: UUID,
+    tenant_id: UUID,
+    branch_id: UUID,
+    user_id: UUID,
+    reason: str | None = None,
+) -> schemas.AttendanceSessionResponse:
+    """Return a submitted attendance session for revision."""
+    session = _get_session_or_404(db, session_id, tenant_id, branch_id)
+
+    if session.status != "SUBMITTED":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only SUBMITTED sessions can be returned for revision.",
+        )
+
+    # Transition back to DRAFT and clear submission metadata
+    repository.update_session_status(
+        db,
+        session.id,
+        "DRAFT",
+        user_id,
+        datetime.now(timezone.utc),
+    )
+
+    # Record an audit event preserving the return action
+    audit_event = AuditEvent(
+        tenant_id=tenant_id,
+        branch_id=branch_id,
+        actor_user_id=user_id,
+        module_code="attendance",
+        action_key="ATTENDANCE_RETURNED_FOR_REVISION",
+        target_type="AttendanceSession",
+        target_id=session.id,
+        outcome="SUCCEEDED",
+        reason=reason,
+        correlation_id=uuid4(),
+        created_at=datetime.now(timezone.utc),
+    )
+    db.add(audit_event)
+
     db.commit()
     return _build_session_response(db, session)
 

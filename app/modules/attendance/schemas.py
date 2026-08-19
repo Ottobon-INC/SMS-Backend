@@ -58,3 +58,6 @@ class AttendanceSessionListItem(BaseModel):
     submittedAt: datetime | None = None
     finalizedBy: str | None = None
     finalizedAt: datetime | None = None
+
+class ReturnAttendancePayload(BaseModel):
+    reason: str | None = None

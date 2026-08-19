@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from typing import Any
+from uuid import UUID
 
 from fastapi import HTTPException, status
 
@@ -19,8 +21,8 @@ from app.modules.dashboard.schemas import (
     DashboardStudentSummary,
     DashboardSummaryCard,
     OfficeStaffDashboardResponse,
+    InstitutionDashboardResponse
 )
-
 
 class DashboardService:
     """Build read-only dashboard responses."""
@@ -28,48 +30,85 @@ class DashboardService:
     def __init__(self, repository: DashboardRepository) -> None:
         self.repository = repository
 
-    def get_office_staff_dashboard(self, context: RequestContext) -> OfficeStaffDashboardResponse:
-        """Return the operational dashboard for branch-scoped staff users."""
+    def get_office_staff_dashboard(
+        self, context: RequestContext, requested_branch_id: UUID | None = None
+    ) -> OfficeStaffDashboardResponse:
+        """Return the branch-scoped operational dashboard."""
 
         if context.tenant_id is None:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Tenant scope required.",
             )
-        if context.branch_id is None:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Branch scope required.",
-            )
+            
+        resolved_branch_id = context.branch_id
+        
+        if resolved_branch_id is None:
+            # Tenant-scoped user (e.g. Dean) requesting a specific branch
+            if requested_branch_id is None:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Branch scope required.",
+                )
+            if not self.repository.is_branch_in_tenant(context.tenant_id, requested_branch_id):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Branch not found in tenant scope.",
+                )
+            resolved_branch_id = requested_branch_id
+            
         if "dashboard" not in context.enabled_modules:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Module disabled.",
             )
 
+        return OfficeStaffDashboardResponse(**self._build_dashboard(context, resolved_branch_id))
+
+    def get_institution_dashboard(self, context: RequestContext) -> InstitutionDashboardResponse:
+        """Return the operational dashboard aggregated at the tenant scope for Institution Admins/Deans."""
+
+        if context.tenant_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Tenant scope required.",
+            )
+        if "dashboard" not in context.enabled_modules:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Module disabled.",
+            )
+            
+        payload = self._build_dashboard(context, context.branch_id)
+        payload["branch_summaries"] = self.repository.get_branch_summaries(context.tenant_id)
+        return InstitutionDashboardResponse(**payload)
+
+    def _build_dashboard(self, context: RequestContext, branch_id: UUID | None) -> dict[str, Any]:
+        """Build the dashboard response payload for the authorized scope."""
+        assert context.tenant_id is not None, "Tenant scope required."
         today = date.today()
-        student_counts = self.repository.get_student_summary(context.tenant_id, context.branch_id)
-        fee_counts = self.repository.get_fee_summary(context.tenant_id, context.branch_id)
+        student_counts = self.repository.get_student_summary(context.tenant_id, branch_id)
+        fee_counts = self.repository.get_fee_summary(context.tenant_id, branch_id)
         attendance_counts = self.repository.get_attendance_summary(
             context.tenant_id,
-            context.branch_id,
+            branch_id,
             today,
         )
-        import_counts = self.repository.get_import_summary(context.tenant_id, context.branch_id)
-        exam_counts = self.repository.get_exam_summary(context.tenant_id, context.branch_id)
+        import_counts = self.repository.get_import_summary(context.tenant_id, branch_id)
+        exam_counts = self.repository.get_exam_summary(context.tenant_id, branch_id)
 
         students = DashboardStudentSummary(
             **student_counts,
             recent_students=self.repository.get_recent_students(
                 context.tenant_id,
-                context.branch_id,
+                branch_id,
             ),
         )
         fees = DashboardFeeSummary(
             **fee_counts,
             recent_payments=self.repository.get_recent_payments(
                 context.tenant_id,
-                context.branch_id,
+                branch_id,
             ),
         )
         attendance = DashboardAttendanceSummary(
@@ -77,31 +116,31 @@ class DashboardService:
             **attendance_counts,
             recent_sessions=self.repository.get_recent_attendance_sessions(
                 context.tenant_id,
-                context.branch_id,
+                branch_id,
             ),
         )
         imports = DashboardImportSummary(**import_counts)
         examinations = DashboardExamSummary(
             **exam_counts,
-            latest_exams=self.repository.get_latest_exams(context.tenant_id, context.branch_id),
+            latest_exams=self.repository.get_latest_exams(context.tenant_id, branch_id),
         )
 
-        return OfficeStaffDashboardResponse(
-            scope=DashboardScope(
+        return {
+            "scope": DashboardScope(
                 tenant_id=context.tenant_id,
-                branch_id=context.branch_id,
-                branch_name=self.repository.get_branch_name(context.tenant_id, context.branch_id),
+                branch_id=branch_id,
+                branch_name=self.repository.get_branch_name(context.tenant_id, branch_id),
                 role_codes=sorted(context.canonical_role_codes),
             ),
-            generated_at=datetime.now(UTC),
-            summary_cards=self._summary_cards(students, attendance, fees, imports, examinations),
-            quick_actions=self._quick_actions(context),
-            students=students,
-            attendance=attendance,
-            fees=fees,
-            imports=imports,
-            examinations=examinations,
-        )
+            "generated_at": datetime.now(UTC),
+            "summary_cards": self._summary_cards(students, attendance, fees, imports, examinations),
+            "quick_actions": self._quick_actions(context),
+            "students": students,
+            "attendance": attendance,
+            "fees": fees,
+            "imports": imports,
+            "examinations": examinations,
+        }
 
     def _summary_cards(
         self,

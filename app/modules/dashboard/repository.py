@@ -36,6 +36,69 @@ class DashboardRepository:
             {"tenant_id": tenant_id, "branch_id": branch_id},
         ).scalar_one_or_none()
 
+    def is_branch_in_tenant(self, tenant_id: UUID, branch_id: UUID) -> bool:
+        return self.session.execute(
+            text(
+                """
+                SELECT 1
+                FROM sms_branches
+                WHERE tenant_id = :tenant_id
+                  AND id = :branch_id
+                """
+            ),
+            {"tenant_id": tenant_id, "branch_id": branch_id},
+        ).first() is not None
+
+    def get_branch_summaries(self, tenant_id: UUID) -> list[dict[str, Any]]:
+        rows = self.session.execute(
+            text(
+                """
+                WITH active_students AS (
+                    SELECT e.branch_id, count(DISTINCT s.id) AS cnt
+                    FROM sms_enrollments e
+                    JOIN sms_students s ON s.id = e.student_id AND s.current_status = 'ACTIVE'
+                    WHERE e.tenant_id = :tenant_id AND e.is_current = true AND e.status = 'ACTIVE'
+                    GROUP BY e.branch_id
+                ),
+                total_sections AS (
+                    SELECT b.branch_id, count(sec.id) AS total_sec
+                    FROM sms_batches b
+                    JOIN sms_sections sec ON sec.batch_id = b.id AND sec.status = 'ACTIVE'
+                    WHERE b.tenant_id = :tenant_id
+                    GROUP BY b.branch_id
+                ),
+                sessions_today AS (
+                    SELECT branch_id, count(id) AS sessions_today
+                    FROM sms_attendance_sessions
+                    WHERE tenant_id = :tenant_id AND attendance_date = CURRENT_DATE
+                    GROUP BY branch_id
+                ),
+                fees AS (
+                    SELECT branch_id, sum(outstanding_amount) AS outstanding
+                    FROM sms_fee_accounts
+                    WHERE tenant_id = :tenant_id AND status <> 'CANCELLED'
+                    GROUP BY branch_id
+                )
+                SELECT 
+                    b.id AS branch_id,
+                    b.display_name AS branch_name,
+                    COALESCE(stu.cnt, 0) AS active_students,
+                    COALESCE(att.sessions_today, 0) AS sessions_today,
+                    GREATEST(COALESCE(tsec.total_sec, 0) - COALESCE(att.sessions_today, 0), 0) AS sections_without_session,
+                    COALESCE(fee.outstanding, 0) AS fee_outstanding
+                FROM sms_branches b
+                LEFT JOIN active_students stu ON stu.branch_id = b.id
+                LEFT JOIN sessions_today att ON att.branch_id = b.id
+                LEFT JOIN total_sections tsec ON tsec.branch_id = b.id
+                LEFT JOIN fees fee ON fee.branch_id = b.id
+                WHERE b.tenant_id = :tenant_id AND b.status = 'ACTIVE'
+                ORDER BY b.display_name
+                """
+            ),
+            {"tenant_id": tenant_id},
+        ).mappings()
+        return [dict(row) for row in rows]
+
     def get_student_summary(self, tenant_id: UUID, branch_id: UUID | None) -> dict[str, Any]:
         params = {"tenant_id": tenant_id, "branch_id": branch_id}
         row = self.session.execute(
@@ -52,7 +115,7 @@ class DashboardRepository:
                     WHERE e.tenant_id = :tenant_id
                       AND e.is_current = true
                       AND e.status = 'ACTIVE'
-                      AND (:branch_id IS NULL OR e.branch_id = :branch_id)
+                      AND (CAST(:branch_id AS UUID) IS NULL OR e.branch_id = CAST(:branch_id AS UUID))
                 ),
                 active_students AS (
                     SELECT DISTINCT s.id
@@ -111,7 +174,8 @@ class DashboardRepository:
                     e.admission_number,
                     ap.programme_name,
                     sec.section_name,
-                    s.created_at
+                    s.created_at,
+                    COALESCE(b.display_name, b.legal_name) AS branch_name
                 FROM sms_enrollments e
                 JOIN sms_students s
                   ON s.tenant_id = e.tenant_id
@@ -122,9 +186,12 @@ class DashboardRepository:
                 LEFT JOIN sms_sections sec
                   ON sec.tenant_id = e.tenant_id
                  AND sec.id = e.section_id
+                LEFT JOIN sms_branches b
+                  ON b.tenant_id = e.tenant_id
+                 AND b.id = e.branch_id
                 WHERE e.tenant_id = :tenant_id
                   AND e.is_current = true
-                  AND (:branch_id IS NULL OR e.branch_id = :branch_id)
+                  AND (CAST(:branch_id AS UUID) IS NULL OR e.branch_id = CAST(:branch_id AS UUID))
                 ORDER BY s.created_at DESC
                 LIMIT 5
                 """
@@ -146,7 +213,7 @@ class DashboardRepository:
                 FROM sms_fee_accounts
                 WHERE tenant_id = :tenant_id
                   AND status <> 'CANCELLED'
-                  AND (:branch_id IS NULL OR branch_id = :branch_id)
+                  AND (CAST(:branch_id AS UUID) IS NULL OR branch_id = CAST(:branch_id AS UUID))
                 """
             ),
             {"tenant_id": tenant_id, "branch_id": branch_id},
@@ -160,12 +227,12 @@ class DashboardRepository:
                   AND entry_type = 'PAYMENT'
                   AND status = 'POSTED'
                   AND receipt_date = CURRENT_DATE
-                  AND (:branch_id IS NULL OR branch_id = :branch_id)
+                  AND (CAST(:branch_id AS UUID) IS NULL OR branch_id = CAST(:branch_id AS UUID))
                 """
             ),
             {"tenant_id": tenant_id, "branch_id": branch_id},
         ).scalar_one()
-        result = dict(row)
+        result: dict[str, Any] = dict(row)
         result["payments_today"] = payments_today or Decimal("0")
         return result
 
@@ -180,7 +247,8 @@ class DashboardRepository:
                     fle.payment_mode,
                     fle.receipt_date,
                     COALESCE(s.display_name, s.legal_name) AS student_name,
-                    e.admission_number
+                    e.admission_number,
+                    COALESCE(b.display_name, b.legal_name) AS branch_name
                 FROM sms_fee_ledger_entries fle
                 JOIN sms_students s
                   ON s.tenant_id = fle.tenant_id
@@ -188,10 +256,13 @@ class DashboardRepository:
                 JOIN sms_enrollments e
                   ON e.tenant_id = fle.tenant_id
                  AND e.id = fle.enrollment_id
+                LEFT JOIN sms_branches b
+                  ON b.tenant_id = fle.tenant_id
+                 AND b.id = fle.branch_id
                 WHERE fle.tenant_id = :tenant_id
                   AND fle.entry_type = 'PAYMENT'
                   AND fle.status = 'POSTED'
-                  AND (:branch_id IS NULL OR fle.branch_id = :branch_id)
+                  AND (CAST(:branch_id AS UUID) IS NULL OR fle.branch_id = CAST(:branch_id AS UUID))
                 ORDER BY fle.receipt_date DESC NULLS LAST, fle.created_at DESC
                 LIMIT 5
                 """
@@ -217,14 +288,14 @@ class DashboardRepository:
                      AND b.id = sec.batch_id
                     WHERE sec.tenant_id = :tenant_id
                       AND sec.status = 'ACTIVE'
-                      AND (:branch_id IS NULL OR b.branch_id = :branch_id)
+                      AND (CAST(:branch_id AS UUID) IS NULL OR b.branch_id = CAST(:branch_id AS UUID))
                 ),
                 sessions_today AS (
                     SELECT *
                     FROM sms_attendance_sessions
                     WHERE tenant_id = :tenant_id
                       AND attendance_date = :today
-                      AND (:branch_id IS NULL OR branch_id = :branch_id)
+                      AND (CAST(:branch_id AS UUID) IS NULL OR branch_id = CAST(:branch_id AS UUID))
                 )
                 SELECT
                     (SELECT count(*) FROM sessions_today) AS sessions_today,
@@ -264,7 +335,7 @@ class DashboardRepository:
                 LEFT JOIN sms_batches b ON b.id = sec.batch_id
                 LEFT JOIN sms_academic_programmes ap ON ap.id = b.programme_id
                 WHERE ats.tenant_id = :tenant_id
-                  AND (:branch_id IS NULL OR ats.branch_id = :branch_id)
+                  AND (CAST(:branch_id AS UUID) IS NULL OR ats.branch_id = CAST(:branch_id AS UUID))
                 ORDER BY ats.attendance_date DESC, ats.created_at DESC
                 LIMIT 5
                 """
@@ -278,19 +349,23 @@ class DashboardRepository:
             text(
                 """
                 SELECT
-                    id,
-                    module_code,
-                    import_type,
-                    source_filename,
-                    status,
-                    summary,
-                    created_at,
-                    committed_at
-                FROM sms_import_batches
-                WHERE tenant_id = :tenant_id
-                  AND (:branch_id IS NULL OR branch_id IS NULL OR branch_id = :branch_id)
-                  AND module_code IN ('students', 'fees')
-                ORDER BY created_at DESC
+                    ib.id,
+                    ib.module_code,
+                    ib.import_type,
+                    ib.source_filename,
+                    ib.status,
+                    ib.summary,
+                    ib.created_at,
+                    ib.committed_at,
+                    COALESCE(COALESCE(b.display_name, b.legal_name), 'Institution') AS branch_name
+                FROM sms_import_batches ib
+                LEFT JOIN sms_branches b
+                  ON b.tenant_id = ib.tenant_id
+                 AND b.id = ib.branch_id
+                WHERE ib.tenant_id = :tenant_id
+                  AND (CAST(:branch_id AS UUID) IS NULL OR ib.branch_id IS NULL OR ib.branch_id = CAST(:branch_id AS UUID))
+                  AND ib.module_code IN ('students', 'fees')
+                ORDER BY ib.created_at DESC
                 LIMIT 8
                 """
             ),
@@ -324,8 +399,8 @@ class DashboardRepository:
                 FROM sms_exams
                 WHERE tenant_id = :tenant_id
                   AND (
-                    :branch_id IS NULL
-                    OR branch_id = :branch_id
+                    CAST(:branch_id AS UUID) IS NULL
+                    OR branch_id = CAST(:branch_id AS UUID)
                     OR scope = 'ALL_BRANCHES'
                     OR (
                         scope = 'SELECTED_BRANCHES'
@@ -345,8 +420,8 @@ class DashboardRepository:
                 WHERE ser.tenant_id = :tenant_id
                   AND ser.status IN ('DRAFT', 'RETURNED_FOR_CORRECTION')
                   AND (
-                    :branch_id IS NULL
-                    OR ex.branch_id = :branch_id
+                    CAST(:branch_id AS UUID) IS NULL
+                    OR ex.branch_id = CAST(:branch_id AS UUID)
                     OR ex.scope = 'ALL_BRANCHES'
                     OR (
                         ex.scope = 'SELECTED_BRANCHES'
@@ -357,7 +432,7 @@ class DashboardRepository:
             ),
             params,
         ).scalar_one()
-        result = dict(row)
+        result: dict[str, Any] = dict(row)
         result["marks_entry_pending"] = marks_entry_pending
         return result
 
@@ -376,13 +451,15 @@ class DashboardRepository:
                     ex.type,
                     ex.exam_date,
                     ex.status,
-                    ap.programme_name
+                    ap.programme_name,
+                    COALESCE(COALESCE(b.display_name, b.legal_name), 'All Branches') AS branch_name
                 FROM sms_exams ex
                 LEFT JOIN sms_academic_programmes ap ON ap.id = ex.programme_id
+                LEFT JOIN sms_branches b ON b.id = ex.branch_id
                 WHERE ex.tenant_id = :tenant_id
                   AND (
-                    :branch_id IS NULL
-                    OR ex.branch_id = :branch_id
+                    CAST(:branch_id AS UUID) IS NULL
+                    OR ex.branch_id = CAST(:branch_id AS UUID)
                     OR ex.scope = 'ALL_BRANCHES'
                     OR (
                         ex.scope = 'SELECTED_BRANCHES'

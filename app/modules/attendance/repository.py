@@ -107,6 +107,10 @@ def update_session_status(
     elif status == "FINALIZED":
         values["finalized_by"] = user_id
         values["finalized_at"] = timestamp
+    elif status == "DRAFT":
+        # Clear submission metadata when returning for revision
+        values["submitted_by"] = None
+        values["submitted_at"] = None
         
     stmt = (
         update(AttendanceSession)
