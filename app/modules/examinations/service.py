@@ -260,7 +260,7 @@ class ExaminationsService:
                 sub_map[ms.subject_code] = {"name": ms.subject_name, "max": 100, "pass": 35}
 
         print("\n" + "=" * 80)
-        print("📱 WHATSAPP PARENT NOTIFICATION DISPATCH (SERVER LOG)")
+        print("WHATSAPP PARENT NOTIFICATION DISPATCH (SERVER LOG)")
         print("=" * 80)
 
         dispatched_count = 0
@@ -269,7 +269,9 @@ class ExaminationsService:
             score_details = []
             total_obtained = 0
             total_max = 0
-            is_overall_pass = True
+            absent_subs = []
+            failed_subs = []
+            attempted_count = 0
 
             for sub_key, score_val in subject_marks.items():
                 try:
@@ -285,18 +287,29 @@ class ExaminationsService:
                 if score < 0:
                     status_str = "ABSENT" if score == -1 else "EXEMPTED"
                     score_details.append(f"  • {sub_name}: [{status_str}]")
+                    if score == -1:
+                        absent_subs.append(sub_name)
                     continue
 
+                attempted_count += 1
                 is_pass = score >= pass_m
                 if not is_pass:
-                    is_overall_pass = False
+                    failed_subs.append(sub_name)
 
                 total_obtained += score
                 total_max += max_m
                 score_details.append(f"  • {sub_name}: {score:g} / {max_m} (Pass: {pass_m}) -> {'PASSED' if is_pass else 'FAILED'}")
 
             pct = (total_obtained / total_max * 100) if total_max > 0 else 0
-            overall_result = "PASSED 🎉" if is_overall_pass else "NEEDS IMPROVEMENT"
+
+            if absent_subs:
+                reasons = ", ".join(absent_subs[:2])
+                final_status = f"FAILED (Absent in {len(absent_subs)} subjects)" if len(absent_subs) > 2 else f"FAILED (Absent in {reasons})"
+            elif failed_subs:
+                reasons = ", ".join(failed_subs[:2])
+                final_status = f"FAILED (Failed in {len(failed_subs)} subjects)" if len(failed_subs) > 2 else f"FAILED (Failed in {reasons})"
+            else:
+                final_status = f"PASSED (Passed All {attempted_count} Subjects)" if attempted_count > 0 else "PASSED"
 
             msg_block = f"""
 To Parent Mobile : {row.guardian_mobile} (Guardian: {row.guardian_name or 'Parent/Guardian'})
@@ -305,13 +318,14 @@ Assessment       : {row.exam_name} (Date: {row.exam_date})
 --------------------------------------------------------------------------------
 MARK DETAILS:
 {chr(10).join(score_details) if score_details else '  (No mark details entered)'}
+--------------------------------------------------------------------------------
 TOTAL SCORE      : {total_obtained:g} / {total_max:g} ({pct:.1f}%)
-OVERALL RESULT   : {overall_result}
+FINAL STATUS     : {final_status}
 --------------------------------------------------------------------------------"""
             print(msg_block)
             dispatched_count += 1
 
-        print(f"✅ Total WhatsApp Dispatches Sent: {dispatched_count}")
+        print(f"Total WhatsApp Dispatches Sent: {dispatched_count}")
         print("=" * 80 + "\n")
 
         return self.repo.update_exam(
@@ -439,7 +453,7 @@ OVERALL RESULT   : {overall_result}
     ) -> None:
         """Logs a targeted WhatsApp correction notification for ONLY one modified student."""
         query = text("""
-            SELECT
+            SELECT 
                 s.legal_name AS student_name,
                 s.student_number,
                 g.full_name AS guardian_name,
@@ -488,7 +502,9 @@ OVERALL RESULT   : {overall_result}
         score_details = []
         total_obtained = 0
         total_max = 0
-        is_overall_pass = True
+        absent_subs = []
+        failed_subs = []
+        attempted_count = 0
 
         for sub_key, score_val in subject_marks.items():
             try:
@@ -504,27 +520,41 @@ OVERALL RESULT   : {overall_result}
             if score < 0:
                 status_str = "ABSENT" if score == -1 else "EXEMPTED"
                 score_details.append(f"  • {sub_name}: [{status_str}]")
+                if score == -1:
+                    absent_subs.append(sub_name)
                 continue
 
-            if score < pass_m:
-                is_overall_pass = False
+            attempted_count += 1
+            is_pass = score >= pass_m
+            if not is_pass:
+                failed_subs.append(sub_name)
+
             total_obtained += score
             total_max += max_m
-            score_details.append(f"  • {sub_name}: {score:g} / {max_m} (Pass: {pass_m})")
+            score_details.append(f"  • {sub_name}: {score:g} / {max_m} (Pass: {pass_m}) -> {'PASSED' if is_pass else 'FAILED'}")
 
         pct = (total_obtained / total_max * 100) if total_max > 0 else 0
-        overall_result = "PASSED 🎉" if is_overall_pass else "NEEDS IMPROVEMENT"
+
+        if absent_subs:
+            reasons = ", ".join(absent_subs[:2])
+            final_status = f"FAILED (Absent in {len(absent_subs)} subjects)" if len(absent_subs) > 2 else f"FAILED (Absent in {reasons})"
+        elif failed_subs:
+            reasons = ", ".join(failed_subs[:2])
+            final_status = f"FAILED (Failed in {len(failed_subs)} subjects)" if len(failed_subs) > 2 else f"FAILED (Failed in {reasons})"
+        else:
+            final_status = f"PASSED (Passed All {attempted_count} Subjects)" if attempted_count > 0 else "PASSED"
 
         print("\n" + "=" * 80)
-        print("📱 TARGETED SINGLE-STUDENT WHATSAPP CORRECTION DISPATCH (SERVER LOG)")
+        print("TARGETED SINGLE-STUDENT WHATSAPP CORRECTION DISPATCH (SERVER LOG)")
         print("=" * 80)
         print(f"To Parent Mobile : {row.guardian_mobile} (Guardian: {row.guardian_name or 'Parent/Guardian'})")
         print(f"Student Name     : {row.student_name} ({row.student_number}) | Section: {row.section_name or 'Default'}")
         print(f"Assessment       : {row.exam_name} (Date: {row.exam_date})")
-        print("Correction Type  : Single Student Mark Update (Post-Publish)")
+        print(f"Correction Type  : Single Student Mark Update (Post-Publish)")
         print("-" * 80)
         print("UPDATED MARK DETAILS:")
         print(chr(10).join(score_details) if score_details else "  (No mark details entered)")
+        print("-" * 80)
         print(f"UPDATED TOTAL    : {total_obtained:g} / {total_max:g} ({pct:.1f}%)")
-        print(f"UPDATED RESULT   : {overall_result}")
+        print(f"UPDATED STATUS   : {final_status}")
         print("=" * 80 + "\n")
