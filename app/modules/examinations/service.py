@@ -16,11 +16,14 @@ from app.modules.examinations.schemas import (
     ExamDateOverlapCheckResponse,
     StudentExamRecordSave,
 )
+from app.modules.notifications.service import WhatsAppNotificationService
 
 
 class ExaminationsService:
     def __init__(self, db: Session):
         self.repo = ExaminationsRepository(db)
+        self.notif_service = WhatsAppNotificationService(db)
+
 
     def create_exam(self, tenant_id: UUID, user_id: UUID, payload: ExamCreate) -> Exam:
         exam_data = payload.model_dump(exclude={"exam_subjects"})
@@ -48,23 +51,84 @@ class ExaminationsService:
 
         for exam in exams:
             if exam.status == "DRAFT":
+                target_branch_ids = []
+                if getattr(exam, "branch_id", None):
+                    target_branch_ids.append(str(exam.branch_id))
+                if getattr(exam, "branch_ids", None) and isinstance(exam.branch_ids, list):
+                    target_branch_ids.extend([str(bid) for bid in exam.branch_ids if bid])
+
+                target_prog_ids = []
+                if getattr(exam, "programme_ids", None) and isinstance(exam.programme_ids, list):
+                    target_prog_ids.extend([str(pid) for pid in exam.programme_ids if pid])
+                elif getattr(exam, "programme_id", None):
+                    target_prog_ids.append(str(exam.programme_id))
+
+                stream_codes = []
+                if target_prog_ids:
+                    progs = self.repo.db.execute(
+                        text("SELECT programme_code, stream_code FROM sms_academic_programmes WHERE id::text = ANY(CAST(:p_ids AS text[]))"),
+                        {"p_ids": target_prog_ids},
+                    ).fetchall()
+                    for pr in progs:
+                        if pr.stream_code:
+                            stream_codes.append(pr.stream_code.upper())
+                        if pr.programme_code:
+                            stream_codes.append(pr.programme_code.upper())
+
+                excluded_branch_ids = [str(bid) for bid in (getattr(exam, "excluded_branch_ids", []) or []) if bid]
+                if getattr(exam, "exemption_reasons", None) and isinstance(exam.exemption_reasons, dict):
+                    for ex_bid in exam.exemption_reasons.keys():
+                        if ex_bid and str(ex_bid) not in excluded_branch_ids:
+                            excluded_branch_ids.append(str(ex_bid))
+
+                has_branch_filter = len(target_branch_ids) > 0
+                has_prog_filter = len(target_prog_ids) > 0
+                has_stream_filter = len(stream_codes) > 0
+                has_excluded_filter = len(excluded_branch_ids) > 0
+
                 target_sections = self.repo.db.execute(
                     text("""
                         SELECT s.id,
                                COALESCE(COUNT(DISTINCT e.id), 0) AS student_count,
-                               COALESCE(COUNT(DISTINCT CASE WHEN r.id IS NOT NULL AND r.status = 'SUBMITTED' THEN r.student_id END), 0) AS submitted_count
+                               COALESCE(COUNT(DISTINCT CASE WHEN r.id IS NOT NULL AND r.status IN ('SUBMITTED', 'PUBLISHED', 'EXEMPTED') THEN r.student_id END), 0) AS submitted_count
                         FROM sms_sections s
+                        LEFT JOIN sms_batches b ON b.id = s.batch_id
                         JOIN sms_enrollments e ON e.section_id = s.id AND e.status = 'ACTIVE'
                         LEFT JOIN sms_student_exam_records r ON r.section_id = s.id AND r.exam_id = :exam_id
                         WHERE s.tenant_id = :tenant_id
+                          AND s.status = 'ACTIVE'
+                          AND (:has_branch_filter = false OR s.branch_id::text = ANY(CAST(:branch_ids AS text[])))
+                          AND (:has_excluded_filter = false OR s.branch_id::text NOT IN (SELECT unnest(CAST(:excluded_branch_ids AS text[]))))
+                          AND (
+                              :has_prog_filter = false OR
+                              (b.programme_id::text = ANY(CAST(:prog_ids AS text[]))) OR
+                              (:has_stream_filter = true AND (EXISTS (SELECT 1 FROM unnest(CAST(:stream_codes AS text[])) code WHERE code <> '' AND (s.section_name ILIKE code || '-%' OR s.section_name ILIKE code || '%'))))
+                          )
                         GROUP BY s.id
                         HAVING COUNT(DISTINCT e.id) > 0
                     """),
-                    {"tenant_id": tenant_id, "exam_id": exam.id},
+                    {
+                        "tenant_id": tenant_id,
+                        "exam_id": exam.id,
+                        "has_branch_filter": has_branch_filter,
+                        "branch_ids": target_branch_ids if target_branch_ids else [""],
+                        "has_excluded_filter": has_excluded_filter,
+                        "excluded_branch_ids": excluded_branch_ids if excluded_branch_ids else [""],
+                        "has_prog_filter": has_prog_filter,
+                        "prog_ids": target_prog_ids if target_prog_ids else [""],
+                        "has_stream_filter": has_stream_filter,
+                        "stream_codes": stream_codes if stream_codes else [""],
+                    },
                 ).fetchall()
 
-                if target_sections and all(sec.submitted_count >= sec.student_count for sec in target_sections):
+                if target_sections and all(sec.submitted_count >= sec.student_count for sec in target_sections if sec.student_count > 0):
                     exam.status = "SUBMITTED"
+                    self.repo.db.execute(
+                        text("UPDATE sms_exams SET status = 'SUBMITTED', updated_at = NOW() WHERE id = :exam_id AND tenant_id = :tenant_id"),
+                        {"exam_id": exam.id, "tenant_id": tenant_id},
+                    )
+                    self.repo.db.commit()
+
 
         return exams
 
@@ -127,11 +191,19 @@ class ExaminationsService:
         )
 
     def publish_exam(
-        self, exam_id: UUID, tenant_id: UUID, user_id: UUID
+        self, exam_id: UUID, tenant_id: UUID, user_id: UUID, background_tasks: Any | None = None
     ) -> Exam | None:
         exam = self.repo.get_exam_by_id(exam_id, tenant_id)
         if not exam:
             raise ValueError("Exam not found.")
+
+        # Check if dispatches are already ongoing
+        from app.modules.notifications.repository import NotificationsRepository
+        from app.modules.notifications.service import WhatsAppNotificationService
+        notif_repo = NotificationsRepository(self.repo.db)
+        prog = notif_repo.get_progress(str(exam_id))
+        if prog["is_ongoing"]:
+            raise ValueError("WhatsApp dispatches are currently in progress for this assessment. Duplicate publishing is locked.")
 
         target_branch_ids = []
         if getattr(exam, "branch_id", None):
@@ -158,15 +230,21 @@ class ExaminationsService:
                     stream_codes.append(pr.programme_code.upper())
 
         excluded_branch_ids = [str(bid) for bid in (getattr(exam, "excluded_branch_ids", []) or []) if bid]
+        if getattr(exam, "exemption_reasons", None) and isinstance(exam.exemption_reasons, dict):
+            for ex_bid in exam.exemption_reasons.keys():
+                if ex_bid and str(ex_bid) not in excluded_branch_ids:
+                    excluded_branch_ids.append(str(ex_bid))
+
         has_branch_filter = len(target_branch_ids) > 0
         has_prog_filter = len(target_prog_ids) > 0
+        has_stream_filter = len(stream_codes) > 0
         has_excluded_filter = len(excluded_branch_ids) > 0
 
         target_sections = self.repo.db.execute(
             text("""
                 SELECT s.id, s.section_name AS name,
                        COALESCE(COUNT(DISTINCT e.id), 0) AS student_count,
-                       COALESCE(COUNT(DISTINCT CASE WHEN r.id IS NOT NULL AND r.status = 'SUBMITTED' THEN r.student_id END), 0) AS submitted_count
+                       COALESCE(COUNT(DISTINCT CASE WHEN r.id IS NOT NULL AND r.status IN ('SUBMITTED', 'PUBLISHED', 'EXEMPTED') THEN r.student_id END), 0) AS submitted_count
                 FROM sms_sections s
                 LEFT JOIN sms_batches b ON b.id = s.batch_id
                 JOIN sms_enrollments e ON e.section_id = s.id AND e.status = 'ACTIVE'
@@ -178,7 +256,7 @@ class ExaminationsService:
                   AND (
                       :has_prog_filter = false OR
                       (b.programme_id::text = ANY(CAST(:prog_ids AS text[]))) OR
-                      (EXISTS (SELECT 1 FROM unnest(CAST(:stream_codes AS text[])) code WHERE s.section_name ILIKE code || '-%' OR s.section_name ILIKE code || '%'))
+                      (:has_stream_filter = true AND (EXISTS (SELECT 1 FROM unnest(CAST(:stream_codes AS text[])) code WHERE code <> '' AND (s.section_name ILIKE code || '-%' OR s.section_name ILIKE code || '%'))))
                   )
                 GROUP BY s.id, s.section_name
                 HAVING COUNT(DISTINCT e.id) > 0
@@ -192,14 +270,16 @@ class ExaminationsService:
                 "excluded_branch_ids": excluded_branch_ids if excluded_branch_ids else [""],
                 "has_prog_filter": has_prog_filter,
                 "prog_ids": target_prog_ids if target_prog_ids else [""],
+                "has_stream_filter": has_stream_filter,
                 "stream_codes": stream_codes if stream_codes else [""],
             },
         ).fetchall()
 
         unsubmitted_sections = []
         for sec in target_sections:
-            if sec.submitted_count < sec.student_count:
+            if sec.student_count > 0 and sec.submitted_count < sec.student_count:
                 unsubmitted_sections.append(f"{sec.name} ({sec.submitted_count}/{sec.student_count} submitted)")
+
 
         if unsubmitted_sections:
             sec_list = ", ".join(unsubmitted_sections[:3])
@@ -260,7 +340,7 @@ class ExaminationsService:
                 sub_map[ms.subject_code] = {"name": ms.subject_name, "max": 100, "pass": 35}
 
         print("\n" + "=" * 80)
-        print("📱 WHATSAPP PARENT NOTIFICATION DISPATCH (SERVER LOG)")
+        print("WHATSAPP PARENT NOTIFICATION DISPATCH (SERVER LOG)")
         print("=" * 80)
 
         dispatched_count = 0
@@ -269,7 +349,9 @@ class ExaminationsService:
             score_details = []
             total_obtained = 0
             total_max = 0
-            is_overall_pass = True
+            absent_subs = []
+            failed_subs = []
+            attempted_count = 0
 
             for sub_key, score_val in subject_marks.items():
                 try:
@@ -285,18 +367,29 @@ class ExaminationsService:
                 if score < 0:
                     status_str = "ABSENT" if score == -1 else "EXEMPTED"
                     score_details.append(f"  • {sub_name}: [{status_str}]")
+                    if score == -1:
+                        absent_subs.append(sub_name)
                     continue
 
+                attempted_count += 1
                 is_pass = score >= pass_m
                 if not is_pass:
-                    is_overall_pass = False
+                    failed_subs.append(sub_name)
 
                 total_obtained += score
                 total_max += max_m
                 score_details.append(f"  • {sub_name}: {score:g} / {max_m} (Pass: {pass_m}) -> {'PASSED' if is_pass else 'FAILED'}")
 
             pct = (total_obtained / total_max * 100) if total_max > 0 else 0
-            overall_result = "PASSED 🎉" if is_overall_pass else "NEEDS IMPROVEMENT"
+
+            if absent_subs:
+                reasons = ", ".join(absent_subs[:2])
+                final_status = f"FAILED (Absent in {len(absent_subs)} subjects)" if len(absent_subs) > 2 else f"FAILED (Absent in {reasons})"
+            elif failed_subs:
+                reasons = ", ".join(failed_subs[:2])
+                final_status = f"FAILED (Failed in {len(failed_subs)} subjects)" if len(failed_subs) > 2 else f"FAILED (Failed in {reasons})"
+            else:
+                final_status = f"PASSED (Passed All {attempted_count} Subjects)" if attempted_count > 0 else "PASSED"
 
             msg_block = f"""
 To Parent Mobile : {row.guardian_mobile} (Guardian: {row.guardian_name or 'Parent/Guardian'})
@@ -305,14 +398,37 @@ Assessment       : {row.exam_name} (Date: {row.exam_date})
 --------------------------------------------------------------------------------
 MARK DETAILS:
 {chr(10).join(score_details) if score_details else '  (No mark details entered)'}
+--------------------------------------------------------------------------------
 TOTAL SCORE      : {total_obtained:g} / {total_max:g} ({pct:.1f}%)
-OVERALL RESULT   : {overall_result}
+FINAL STATUS     : {final_status}
 --------------------------------------------------------------------------------"""
             print(msg_block)
             dispatched_count += 1
 
-        print(f"✅ Total WhatsApp Dispatches Sent: {dispatched_count}")
+        print(f"Total WhatsApp Dispatches Logged: {dispatched_count}")
         print("=" * 80 + "\n")
+
+        if background_tasks:
+            print("[PUBLISH] >>> background_tasks available, triggering WhatsApp notifications...")
+            try:
+                notif_svc = WhatsAppNotificationService(self.repo.db)
+                result = notif_svc.send_exam_published_notifications(
+                    exam_id=exam_id,
+                    tenant_id=tenant_id,
+                    branch_id=exam.branch_id,
+                    background_tasks=background_tasks,
+                )
+                print(f"[PUBLISH] >>> Notification trigger result: {result}")
+            except Exception as notif_err:
+                # Rollback the aborted transaction so subsequent DB calls (update_exam) can still run
+                try:
+                    self.repo.db.rollback()
+                except Exception:
+                    pass
+                print(f"[PUBLISH] !!! Notification service trigger WARNING (non-fatal): {notif_err}")
+        else:
+            print("[PUBLISH] !!! background_tasks is None/falsy - notifications will NOT be sent!")
+
 
         return self.repo.update_exam(
             exam_id,
@@ -342,6 +458,7 @@ OVERALL RESULT   : {overall_result}
         exam_id: UUID,
         user_id: UUID,
         records: list[StudentExamRecordSave],
+        background_tasks: Any | None = None,
     ) -> list[StudentExamRecord]:
         saved_records = []
         exam = self.repo.get_exam_by_id(exam_id, tenant_id)
@@ -360,8 +477,16 @@ OVERALL RESULT   : {overall_result}
             )
             saved_records.append(r)
 
-            if is_published and rec.student_id:
-                self.notify_single_student_correction(tenant_id, exam_id, rec.student_id, user_id)
+            if is_published and rec.student_id and background_tasks is not None:
+                branch_id = getattr(exam, "branch_id", None)
+                self.notif_service.send_single_student_correction_notification(
+                    exam_id=exam_id,
+                    student_id=rec.student_id,
+                    tenant_id=tenant_id,
+                    branch_id=branch_id,
+                    background_tasks=background_tasks,
+                )
+
 
         # Auto-update exam status to SUBMITTED if all active target sections submit class marks
         if exam and getattr(exam, "status", None) not in ("PUBLISHED", "SUBMITTED"):
@@ -384,7 +509,13 @@ OVERALL RESULT   : {overall_result}
                         stream_codes.append(pr.programme_code.upper())
 
             excluded_branch_ids = [str(bid) for bid in (getattr(exam, "excluded_branch_ids", []) or []) if bid]
+            if getattr(exam, "exemption_reasons", None) and isinstance(exam.exemption_reasons, dict):
+                for ex_bid in exam.exemption_reasons.keys():
+                    if ex_bid and str(ex_bid) not in excluded_branch_ids:
+                        excluded_branch_ids.append(str(ex_bid))
+
             has_prog_filter = len(target_prog_ids) > 0
+            has_stream_filter = len(stream_codes) > 0
             has_excluded_filter = len(excluded_branch_ids) > 0
 
             unsubmitted = self.repo.db.execute(
@@ -400,14 +531,16 @@ OVERALL RESULT   : {overall_result}
                     ) r ON r.section_id = s.id
                     WHERE s.tenant_id = :tenant_id
                       AND s.status = 'ACTIVE'
+                      AND EXISTS (SELECT 1 FROM sms_enrollments e WHERE e.section_id = s.id AND e.status = 'ACTIVE')
                       AND (:branch_id IS NULL OR s.branch_id = :branch_id)
                       AND (:has_excluded_filter = false OR s.branch_id::text NOT IN (SELECT unnest(CAST(:excluded_branch_ids AS text[]))))
                       AND (
                           :has_prog_filter = false OR
                           (b.programme_id::text = ANY(CAST(:prog_ids AS text[]))) OR
-                          (EXISTS (SELECT 1 FROM unnest(CAST(:stream_codes AS text[])) code WHERE s.section_name ILIKE code || '-%' OR s.section_name ILIKE code || '%'))
+                          (:has_stream_filter = true AND (EXISTS (SELECT 1 FROM unnest(CAST(:stream_codes AS text[])) code WHERE code <> '' AND (s.section_name ILIKE code || '-%' OR s.section_name ILIKE code || '%'))))
                       )
                       AND (r.sec_status IS NULL OR r.sec_status = 'DRAFT')
+
                 """),
                 {
                     "exam_id": exam_id,
@@ -417,6 +550,7 @@ OVERALL RESULT   : {overall_result}
                     "excluded_branch_ids": excluded_branch_ids if excluded_branch_ids else [""],
                     "has_prog_filter": has_prog_filter,
                     "prog_ids": target_prog_ids if target_prog_ids else [""],
+                    "has_stream_filter": has_stream_filter,
                     "stream_codes": stream_codes if stream_codes else [""],
                 },
             ).scalar() or 0
@@ -427,6 +561,7 @@ OVERALL RESULT   : {overall_result}
                     {"exam_id": exam_id, "tenant_id": tenant_id},
                 )
                 self.repo.db.commit()
+
 
         return saved_records
 
@@ -488,7 +623,9 @@ OVERALL RESULT   : {overall_result}
         score_details = []
         total_obtained = 0
         total_max = 0
-        is_overall_pass = True
+        absent_subs = []
+        failed_subs = []
+        attempted_count = 0
 
         for sub_key, score_val in subject_marks.items():
             try:
@@ -504,27 +641,41 @@ OVERALL RESULT   : {overall_result}
             if score < 0:
                 status_str = "ABSENT" if score == -1 else "EXEMPTED"
                 score_details.append(f"  • {sub_name}: [{status_str}]")
+                if score == -1:
+                    absent_subs.append(sub_name)
                 continue
 
-            if score < pass_m:
-                is_overall_pass = False
+            attempted_count += 1
+            is_pass = score >= pass_m
+            if not is_pass:
+                failed_subs.append(sub_name)
+
             total_obtained += score
             total_max += max_m
-            score_details.append(f"  • {sub_name}: {score:g} / {max_m} (Pass: {pass_m})")
+            score_details.append(f"  • {sub_name}: {score:g} / {max_m} (Pass: {pass_m}) -> {'PASSED' if is_pass else 'FAILED'}")
 
         pct = (total_obtained / total_max * 100) if total_max > 0 else 0
-        overall_result = "PASSED 🎉" if is_overall_pass else "NEEDS IMPROVEMENT"
+
+        if absent_subs:
+            reasons = ", ".join(absent_subs[:2])
+            final_status = f"FAILED (Absent in {len(absent_subs)} subjects)" if len(absent_subs) > 2 else f"FAILED (Absent in {reasons})"
+        elif failed_subs:
+            reasons = ", ".join(failed_subs[:2])
+            final_status = f"FAILED (Failed in {len(failed_subs)} subjects)" if len(failed_subs) > 2 else f"FAILED (Failed in {reasons})"
+        else:
+            final_status = f"PASSED (Passed All {attempted_count} Subjects)" if attempted_count > 0 else "PASSED"
 
         print("\n" + "=" * 80)
-        print("📱 TARGETED SINGLE-STUDENT WHATSAPP CORRECTION DISPATCH (SERVER LOG)")
+        print("TARGETED SINGLE-STUDENT WHATSAPP CORRECTION DISPATCH (SERVER LOG)")
         print("=" * 80)
         print(f"To Parent Mobile : {row.guardian_mobile} (Guardian: {row.guardian_name or 'Parent/Guardian'})")
         print(f"Student Name     : {row.student_name} ({row.student_number}) | Section: {row.section_name or 'Default'}")
         print(f"Assessment       : {row.exam_name} (Date: {row.exam_date})")
-        print("Correction Type  : Single Student Mark Update (Post-Publish)")
+        print(f"Correction Type  : Single Student Mark Update (Post-Publish)")
         print("-" * 80)
         print("UPDATED MARK DETAILS:")
         print(chr(10).join(score_details) if score_details else "  (No mark details entered)")
+        print("-" * 80)
         print(f"UPDATED TOTAL    : {total_obtained:g} / {total_max:g} ({pct:.1f}%)")
-        print(f"UPDATED RESULT   : {overall_result}")
+        print(f"UPDATED STATUS   : {final_status}")
         print("=" * 80 + "\n")

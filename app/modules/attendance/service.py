@@ -292,8 +292,9 @@ def finalize_session(
     tenant_id: UUID,
     branch_id: UUID,
     user_id: UUID,
+    background_tasks: Any | None = None,
 ) -> schemas.AttendanceSessionResponse:
-    """Finalize a submitted attendance session."""
+    """Finalize a submitted attendance session and trigger WhatsApp absent alerts."""
     session = _get_session_or_404(db, session_id, tenant_id, branch_id)
 
     if session.status != "SUBMITTED":
@@ -310,6 +311,37 @@ def finalize_session(
         datetime.now(UTC),
     )
     db.commit()
+
+    if background_tasks:
+        try:
+            records = repository.get_records_for_session(db, session.id)
+            absent_enrollment_ids = [r.enrollment_id for r in records if r.attendance_status == "ABSENT"]
+
+            if absent_enrollment_ids:
+                from sqlalchemy import text
+                from app.modules.notifications.service import WhatsAppNotificationService
+                stu_rows = db.execute(
+                    text("SELECT student_id FROM sms_enrollments WHERE id::text = ANY(CAST(:e_ids AS text[]))"),
+                    {"e_ids": [str(e) for e in absent_enrollment_ids]}
+                ).fetchall()
+                absent_student_ids = [r.student_id for r in stu_rows]
+
+                sec_row = db.execute(text("SELECT section_name FROM sms_sections WHERE id = :id"), {"id": session.section_id}).first()
+                section_name = sec_row.section_name if sec_row else "Default"
+
+                notif_svc = WhatsAppNotificationService(db)
+                notif_svc.send_attendance_absent_notifications(
+                    section_id=session.section_id,
+                    section_name=section_name,
+                    absent_student_ids=absent_student_ids,
+                    date_str=str(session.attendance_date),
+                    tenant_id=tenant_id,
+                    branch_id=branch_id,
+                    background_tasks=background_tasks,
+                )
+        except Exception as notif_err:
+            print(f"Attendance notification trigger warning: {notif_err}")
+
     return _build_session_response(db, session)
 
 

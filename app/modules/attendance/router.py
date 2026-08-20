@@ -2,7 +2,7 @@
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.core.database.session import get_db_session
@@ -161,6 +161,7 @@ def return_session_for_revision(
 @router.post("/{session_id}/finalize", response_model=schemas.AttendanceSessionResponse)
 def finalize_session(
     session_id: UUID,
+    background_tasks: BackgroundTasks,
     db: Session = db_dependency,
     context: RequestContext = branch_scope_dependency,
     _: RequestContext = attendance_finalize_dependency,
@@ -174,4 +175,5 @@ def finalize_session(
         tenant_id=context.tenant_id,
         branch_id=context.branch_id,
         user_id=context.app_user_id,
+        background_tasks=background_tasks,
     )

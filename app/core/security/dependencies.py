@@ -5,7 +5,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from uuid import UUID
 
-from fastapi import Depends, Header, HTTPException, Request, status
+from fastapi import Depends, Header, HTTPException, Query, Request, status
+
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
@@ -19,7 +20,47 @@ from app.core.security.jwt import (
 from app.modules.authentication.repository import AuthenticationRepository
 from app.modules.authentication.service import AuthenticationService
 
+from sqlalchemy import text
+
 bearer_scheme = HTTPBearer(auto_error=False)
+
+
+def resolve_tenant_id(
+    tenant_id: UUID | None = Query(default=None),
+    x_tenant_id: UUID | None = Header(default=None, alias="X-Tenant-ID"),
+    db: Session = Depends(get_db_session),
+) -> UUID:
+    """Dynamically resolve tenant_id from query param, request header, or active tenant in database."""
+    if tenant_id is not None:
+        return tenant_id
+    if x_tenant_id is not None:
+        return x_tenant_id
+
+    row = db.execute(text("SELECT id FROM sms_tenants WHERE status = 'ACTIVE' ORDER BY created_at ASC LIMIT 1")).scalar_one_or_none()
+    if row:
+        return UUID(str(row)) if not isinstance(row, UUID) else row
+
+    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No active tenant found in database.")
+
+
+def resolve_user_id(
+    user_id: UUID | None = Query(default=None),
+    x_user_id: UUID | None = Header(default=None, alias="X-User-ID"),
+    db: Session = Depends(get_db_session),
+) -> UUID:
+    """Dynamically resolve user_id from query param, request header, or first user in database."""
+    if user_id is not None:
+        return user_id
+    if x_user_id is not None:
+        return x_user_id
+
+    row = db.execute(text("SELECT id FROM sms_users ORDER BY created_at ASC LIMIT 1")).scalar_one_or_none()
+    if row:
+        return UUID(str(row)) if not isinstance(row, UUID) else row
+
+    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No user found in database.")
+
+
 
 
 def get_authenticated_principal(

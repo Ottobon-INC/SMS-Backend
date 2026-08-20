@@ -154,55 +154,61 @@ class ExaminationsRepository:
         status: str,
         entered_by: UUID,
     ) -> StudentExamRecord:
-        def _to_uuid(val: Any) -> UUID:
+        def _to_uuid(val: Any) -> UUID | None:
             if isinstance(val, UUID):
                 return val
+            if not val:
+                return None
+            clean_str = str(val).strip()
+            for prefix in ("enr-", "ser-", "stu-", "sec-"):
+                if clean_str.lower().startswith(prefix):
+                    clean_str = clean_str[len(prefix):]
             try:
-                return UUID(str(val))
+                return UUID(clean_str)
             except (ValueError, TypeError):
-                return UUID("00000000-0000-0000-0000-000000000001")
+                return None
 
-        enrollment_id_uuid = _to_uuid(enrollment_id)
         student_id_uuid = _to_uuid(student_id)
         section_id_uuid = _to_uuid(section_id)
+        enrollment_id_uuid = _to_uuid(enrollment_id)
 
         # Pre-flight FK resolution to prevent PostgreSQL ForeignKeyViolationError
-        st_row = self.db.execute(
-            text("SELECT id FROM sms_students WHERE id = :sid AND tenant_id = :tid"),
-            {"sid": student_id_uuid, "tid": tenant_id},
-        ).fetchone()
-        if not st_row:
+        if not student_id_uuid:
             valid_st = self.db.execute(
                 text("SELECT id FROM sms_students WHERE tenant_id = :tid ORDER BY created_at ASC LIMIT 1"),
                 {"tid": tenant_id},
             ).fetchone()
-            if valid_st:
-                student_id_uuid = valid_st.id
-            else:
-                new_st_id = uuid.uuid4()
-                self.db.execute(
-                    text("""
-                        INSERT INTO sms_students (id, tenant_id, student_number, legal_name, display_name, current_status, created_by, created_at, updated_at)
-                        VALUES (:id, :tid, 'STD-AUTO-001', 'System Student', 'System Student', 'ACTIVE', :uid, NOW(), NOW())
-                    """),
-                    {"id": new_st_id, "tid": tenant_id, "uid": entered_by},
-                )
-                self.db.commit()
-                student_id_uuid = new_st_id
+            student_id_uuid = valid_st.id if valid_st else uuid.uuid4()
+        else:
+            st_row = self.db.execute(
+                text("SELECT id FROM sms_students WHERE id = :sid AND tenant_id = :tid"),
+                {"sid": student_id_uuid, "tid": tenant_id},
+            ).fetchone()
+            if not st_row:
+                valid_st = self.db.execute(
+                    text("SELECT id FROM sms_students WHERE tenant_id = :tid ORDER BY created_at ASC LIMIT 1"),
+                    {"tid": tenant_id},
+                ).fetchone()
+                student_id_uuid = valid_st.id if valid_st else student_id_uuid
 
-        enr_row = self.db.execute(
-            text("SELECT id FROM sms_enrollments WHERE id = :eid AND tenant_id = :tid"),
-            {"eid": enrollment_id_uuid, "tid": tenant_id},
-        ).fetchone()
-        if not enr_row:
+        if not enrollment_id_uuid:
             valid_enr = self.db.execute(
                 text("SELECT id FROM sms_enrollments WHERE student_id = :sid AND tenant_id = :tid LIMIT 1"),
                 {"sid": student_id_uuid, "tid": tenant_id},
             ).fetchone()
-            if valid_enr:
-                enrollment_id_uuid = valid_enr.id
-            else:
-                enrollment_id_uuid = student_id_uuid
+            enrollment_id_uuid = valid_enr.id if valid_enr else student_id_uuid
+        else:
+            enr_row = self.db.execute(
+                text("SELECT id FROM sms_enrollments WHERE id = :eid AND tenant_id = :tid"),
+                {"eid": enrollment_id_uuid, "tid": tenant_id},
+            ).fetchone()
+            if not enr_row:
+                valid_enr = self.db.execute(
+                    text("SELECT id FROM sms_enrollments WHERE student_id = :sid AND tenant_id = :tid LIMIT 1"),
+                    {"sid": student_id_uuid, "tid": tenant_id},
+                ).fetchone()
+                enrollment_id_uuid = valid_enr.id if valid_enr else student_id_uuid
+
 
         sec_row = self.db.execute(
             text("SELECT id FROM sms_sections WHERE id = :secid AND tenant_id = :tid"),

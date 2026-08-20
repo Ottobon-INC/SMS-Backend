@@ -9,6 +9,7 @@ from app.modules.examinations.router import router as examinations_router
 from app.modules.fees.router import router as fees_router
 from app.modules.imports.router import fee_router as fee_imports_router
 from app.modules.imports.router import router as imports_router
+from app.modules.notifications.router import router as notifications_router
 from app.modules.students.router import router as students_router
 from app.modules.users.router import router as users_router
 
@@ -24,6 +25,7 @@ router.include_router(students_router)
 router.include_router(users_router)
 router.include_router(imports_router)
 router.include_router(fee_imports_router)
+router.include_router(notifications_router)
 
 
 @router.get("/")

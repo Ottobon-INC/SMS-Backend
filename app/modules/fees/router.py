@@ -5,7 +5,8 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends
+
 from sqlalchemy.orm import Session
 
 from app.core.database.session import get_db_session
@@ -93,6 +94,7 @@ def get_fee_ledger(
 def post_fee_payment(
     account_id: UUID,
     payload: FeePaymentCreateRequest,
+    background_tasks: BackgroundTasks,
     context: RequestContext = Depends(require_permission(FEE_PAYMENT_RECORD)),
     service: FeeService = Depends(get_fee_service),
 ) -> FeePaymentPostResponse:
@@ -105,4 +107,5 @@ def post_fee_payment(
         app_user_id=context.app_user_id,
         account_id=account_id,
         payload=payload,
+        background_tasks=background_tasks,
     )

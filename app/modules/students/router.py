@@ -14,12 +14,11 @@ from sqlalchemy.orm import Session
 
 from app.core.database.session import get_db_session
 from app.core.security.context import RequestContext
-from app.core.security.dependencies import require_any_permission, get_request_context
+from app.core.security.dependencies import get_request_context, require_any_permission
 
 router = APIRouter(prefix="/students", tags=["students"])
 
-DEFAULT_TENANT_ID = "e0bb112a-1da7-44e2-8988-a90dc7b5cca5"
-DEFAULT_USER_ID = "842021d3-9826-4c4f-ad83-504be45d4520"
+STUDENT_CREATE_PERMISSIONS = {"student.create", "student.manage"}
 STUDENT_UPDATE_PERMISSIONS = {"student.update_basic", "student.update_sensitive"}
 
 
@@ -81,10 +80,10 @@ def get_students(
     branch_id: str | None = None,
     section_id: str | None = None,
     context: RequestContext = Depends(get_request_context),
-    db: Session = Depends(get_db_session)
+    db: Session = Depends(get_db_session),
 ):
     assert context.tenant_id is not None
-    
+
     # Enforce scope if user is branch-limited (e.g. Principal)
     target_branch_id = branch_id
     if context.branch_id is not None:
@@ -152,6 +151,7 @@ def get_students(
             sgl.status AS guardian_link_status,
             sgl.effective_from AS guardian_link_effective_from,
             sgl.effective_until AS guardian_link_effective_until
+
         FROM sms_students s
         LEFT JOIN sms_enrollments e
             ON e.tenant_id = s.tenant_id
@@ -183,17 +183,16 @@ def get_students(
         LEFT JOIN sms_guardians g
             ON g.tenant_id = sgl.tenant_id
             AND g.id = sgl.guardian_id
-        WHERE
-            s.tenant_id = :tenant_id
+        WHERE s.tenant_id = :tenant_id
             AND s.current_status = 'ACTIVE'
             AND (CAST(:branch_id AS uuid) IS NULL OR e.branch_id = CAST(:branch_id AS uuid))
             AND (CAST(:section_id AS uuid) IS NULL OR e.section_id = CAST(:section_id AS uuid))
         ORDER BY s.created_at DESC
     """)
     rows = db.execute(query, {
-        "tenant_id": context.tenant_id, 
-        "branch_id": target_branch_id, 
-        "section_id": section_id
+        "tenant_id": context.tenant_id,
+        "branch_id": target_branch_id,
+        "section_id": section_id,
     }).fetchall()
 
     def to_iso(value):
@@ -278,6 +277,7 @@ def get_students(
         }
         for r in rows
     ]
+
 
 
 @router.patch("/{student_id}")
@@ -413,12 +413,18 @@ def update_student_inline(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Failed to update student data: {exc}") from exc
 
 
-@router.post("", status_code=status.HTTP_201_CREATED)
-@router.post("/", status_code=status.HTTP_201_CREATED)
-def create_student(payload: dict, db: Session = Depends(get_db_session)):
+@router.post("")
+@router.post("/")
+def create_student(
+    payload: dict,
+    context: RequestContext = Depends(require_any_permission(STUDENT_CREATE_PERMISSIONS)),
+    db: Session = Depends(get_db_session),
+):
+    if context.tenant_id is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Tenant scope required.")
     student_id = payload.get("id") or str(uuid.uuid4())
     student_number = payload.get("admissionNumber") or f"2026-STD-{uuid.uuid4().hex[:4].upper()}"
-    name = payload.get("name") or "New Student"
+    name = payload.get("name") or payload.get("legal_name") or "New Student"
     gender = payload.get("gender") or "MALE"
     dob = payload.get("dob") or payload.get("date_of_birth") or "2008-01-01"
 
@@ -437,14 +443,15 @@ def create_student(payload: dict, db: Session = Depends(get_db_session)):
         query,
         {
             "id": student_id,
-            "tenant_id": DEFAULT_TENANT_ID,
+            "tenant_id": context.tenant_id,
             "student_number": student_number,
             "name": name,
             "dob": dob,
             "gender": gender,
-            "created_by": DEFAULT_USER_ID,
+            "created_by": context.app_user_id,
         },
     ).fetchone()
+
     db.commit()
 
     if res is None:

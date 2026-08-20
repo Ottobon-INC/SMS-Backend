@@ -6,7 +6,8 @@ def seed_database():
     """Seeds prerequisite campus branches, subjects, programmes, and students into PostgreSQL."""
     engine = get_engine()
     
-    tenant_id = "00000000-0000-0000-0000-000000000001"
+    tenant_id = "e0bb112a-1da7-44e2-8988-a90dc7b5cca5"
+
     user_id = "00000000-0000-0000-0000-000000000002"
 
     with engine.begin() as conn:

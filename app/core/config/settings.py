@@ -47,6 +47,21 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     sentry_dsn: str | None = None
 
+    # WhatsApp Notifications Configuration
+    whatsapp_mode: str = "SIMULATOR"  # SIMULATOR or META
+    simulator_url: str = "http://localhost:3001/api/meta_outbound"
+    meta_phone_number_id: str = ""
+    meta_access_token: str = ""
+    whatsapp_verify_token: str = ""
+
+    # Meta WhatsApp Template Names
+    template_fee_receipt: str = "fee_payment_receipt_v1"
+    template_attendance_absent: str = "attendance_absent_v1"
+    template_mark_correction: str = "single_student_correction_v1"
+    template_exam_published: str = "exam_results_published_v1"
+
+
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     def normalized_database_url(self) -> str:
