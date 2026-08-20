@@ -1,6 +1,7 @@
 """Attendance module service layer."""
 
 from datetime import UTC, date, datetime
+from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException, status
