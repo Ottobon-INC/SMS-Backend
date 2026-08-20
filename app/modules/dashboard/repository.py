@@ -84,7 +84,10 @@ class DashboardRepository:
                     b.display_name AS branch_name,
                     COALESCE(stu.cnt, 0) AS active_students,
                     COALESCE(att.sessions_today, 0) AS sessions_today,
-                    GREATEST(COALESCE(tsec.total_sec, 0) - COALESCE(att.sessions_today, 0), 0) AS sections_without_session,
+                    GREATEST(
+                        COALESCE(tsec.total_sec, 0) - COALESCE(att.sessions_today, 0),
+                        0
+                    ) AS sections_without_session,
                     COALESCE(fee.outstanding, 0) AS fee_outstanding
                 FROM sms_branches b
                 LEFT JOIN active_students stu ON stu.branch_id = b.id
@@ -115,7 +118,10 @@ class DashboardRepository:
                     WHERE e.tenant_id = :tenant_id
                       AND e.is_current = true
                       AND e.status = 'ACTIVE'
-                      AND (CAST(:branch_id AS UUID) IS NULL OR e.branch_id = CAST(:branch_id AS UUID))
+                      AND (
+                          CAST(:branch_id AS UUID) IS NULL
+                          OR e.branch_id = CAST(:branch_id AS UUID)
+                      )
                 ),
                 active_students AS (
                     SELECT DISTINCT s.id
@@ -288,7 +294,10 @@ class DashboardRepository:
                      AND b.id = sec.batch_id
                     WHERE sec.tenant_id = :tenant_id
                       AND sec.status = 'ACTIVE'
-                      AND (CAST(:branch_id AS UUID) IS NULL OR b.branch_id = CAST(:branch_id AS UUID))
+                      AND (
+                          CAST(:branch_id AS UUID) IS NULL
+                          OR b.branch_id = CAST(:branch_id AS UUID)
+                      )
                 ),
                 sessions_today AS (
                     SELECT *
@@ -363,7 +372,11 @@ class DashboardRepository:
                   ON b.tenant_id = ib.tenant_id
                  AND b.id = ib.branch_id
                 WHERE ib.tenant_id = :tenant_id
-                  AND (CAST(:branch_id AS UUID) IS NULL OR ib.branch_id IS NULL OR ib.branch_id = CAST(:branch_id AS UUID))
+                  AND (
+                      CAST(:branch_id AS UUID) IS NULL
+                      OR ib.branch_id IS NULL
+                      OR ib.branch_id = CAST(:branch_id AS UUID)
+                  )
                   AND ib.module_code IN ('students', 'fees')
                 ORDER BY ib.created_at DESC
                 LIMIT 8

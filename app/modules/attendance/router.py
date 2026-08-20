@@ -15,14 +15,24 @@ from app.core.security.dependencies import (
 from app.modules.attendance import repository, schemas, service
 
 router = APIRouter(prefix="/attendance/sessions", tags=["attendance"])
+db_dependency = Depends(get_db_session)
+tenant_scope_dependency = Depends(require_tenant_scope)
+branch_scope_dependency = Depends(require_branch_scope)
+attendance_view_dependency = Depends(require_any_permission({"attendance.view"}))
+attendance_mark_dependency = Depends(require_any_permission({"attendance.mark"}))
+attendance_submit_dependency = Depends(require_any_permission({"attendance.submit"}))
+attendance_finalize_dependency = Depends(require_any_permission({"attendance.finalize"}))
+attendance_create_dependency = Depends(
+    require_any_permission({"attendance.mark", "attendance.submit", "attendance.view"})
+)
 
 
 @router.get("", response_model=list[schemas.AttendanceSessionListItem])
 def list_sessions(
     status: str | None = None,
-    db: Session = Depends(get_db_session),
-    context: RequestContext = Depends(require_tenant_scope),
-    _: RequestContext = Depends(require_any_permission({"attendance.view"})),
+    db: Session = db_dependency,
+    context: RequestContext = tenant_scope_dependency,
+    _: RequestContext = attendance_view_dependency,
 ) -> list[schemas.AttendanceSessionListItem]:
     """List attendance sessions for the current branch or tenant."""
     assert context.tenant_id is not None
@@ -36,11 +46,9 @@ def list_sessions(
 @router.post("", response_model=schemas.AttendanceSessionResponse)
 def create_session(
     payload: schemas.AttendanceSessionCreate,
-    db: Session = Depends(get_db_session),
-    context: RequestContext = Depends(require_branch_scope),
-    _: RequestContext = Depends(
-        require_any_permission({"attendance.mark", "attendance.submit", "attendance.view"})
-    ),
+    db: Session = db_dependency,
+    context: RequestContext = branch_scope_dependency,
+    _: RequestContext = attendance_create_dependency,
 ) -> schemas.AttendanceSessionResponse:
     """Create a new daily attendance session (or return existing)."""
     assert context.tenant_id is not None
@@ -75,9 +83,9 @@ def create_session(
 @router.get("/{session_id}", response_model=schemas.AttendanceSessionResponse)
 def get_session(
     session_id: UUID,
-    db: Session = Depends(get_db_session),
-    context: RequestContext = Depends(require_tenant_scope),
-    _: RequestContext = Depends(require_any_permission({"attendance.view"})),
+    db: Session = db_dependency,
+    context: RequestContext = tenant_scope_dependency,
+    _: RequestContext = attendance_view_dependency,
 ) -> schemas.AttendanceSessionResponse:
     """Get a specific attendance session with all student records."""
     assert context.tenant_id is not None
@@ -93,9 +101,9 @@ def get_session(
 def save_draft(
     session_id: UUID,
     payload: schemas.AttendanceDraftSavePayload,
-    db: Session = Depends(get_db_session),
-    context: RequestContext = Depends(require_branch_scope),
-    _: RequestContext = Depends(require_any_permission({"attendance.mark"})),
+    db: Session = db_dependency,
+    context: RequestContext = branch_scope_dependency,
+    _: RequestContext = attendance_mark_dependency,
 ) -> schemas.AttendanceSessionResponse:
     """Save draft attendance records."""
     assert context.tenant_id is not None
@@ -113,9 +121,9 @@ def save_draft(
 @router.post("/{session_id}/submit", response_model=schemas.AttendanceSessionResponse)
 def submit_session(
     session_id: UUID,
-    db: Session = Depends(get_db_session),
-    context: RequestContext = Depends(require_branch_scope),
-    _: RequestContext = Depends(require_any_permission({"attendance.submit"})),
+    db: Session = db_dependency,
+    context: RequestContext = branch_scope_dependency,
+    _: RequestContext = attendance_submit_dependency,
 ) -> schemas.AttendanceSessionResponse:
     """Submit an attendance session for principal review."""
     assert context.tenant_id is not None
@@ -133,9 +141,9 @@ def submit_session(
 def return_session_for_revision(
     session_id: UUID,
     payload: schemas.ReturnAttendancePayload,
-    db: Session = Depends(get_db_session),
-    context: RequestContext = Depends(require_branch_scope),
-    _: RequestContext = Depends(require_any_permission({"attendance.finalize"})),
+    db: Session = db_dependency,
+    context: RequestContext = branch_scope_dependency,
+    _: RequestContext = attendance_finalize_dependency,
 ) -> schemas.AttendanceSessionResponse:
     """Return a submitted attendance session for revision."""
     assert context.tenant_id is not None
@@ -153,9 +161,9 @@ def return_session_for_revision(
 @router.post("/{session_id}/finalize", response_model=schemas.AttendanceSessionResponse)
 def finalize_session(
     session_id: UUID,
-    db: Session = Depends(get_db_session),
-    context: RequestContext = Depends(require_branch_scope),
-    _: RequestContext = Depends(require_any_permission({"attendance.finalize"})),
+    db: Session = db_dependency,
+    context: RequestContext = branch_scope_dependency,
+    _: RequestContext = attendance_finalize_dependency,
 ) -> schemas.AttendanceSessionResponse:
     """Finalize a submitted attendance session."""
     assert context.tenant_id is not None

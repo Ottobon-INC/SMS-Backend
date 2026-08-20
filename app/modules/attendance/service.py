@@ -1,8 +1,7 @@
 """Attendance module service layer."""
 
-from datetime import date, datetime, timezone
-from typing import Any
-from uuid import UUID
+from datetime import UTC, date, datetime
+from uuid import UUID, uuid4
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
@@ -12,7 +11,6 @@ from app.modules.academic_structure.models import Batch, Section
 from app.modules.attendance import repository, schemas
 from app.modules.attendance.models import AttendanceRecord, AttendanceSession
 from app.modules.audit.models import AuditEvent
-from uuid import uuid4
 
 
 def _get_section_or_404(db: Session, section_id: UUID, tenant_id: UUID, branch_id: UUID) -> Section:
@@ -175,7 +173,7 @@ def save_draft_records(
             detail="Can only save draft records for a DRAFT session.",
         )
 
-    now_ts = datetime.now(timezone.utc)
+    now_ts = datetime.now(UTC)
 
     for record_data in payload.records:
         if record_data.attendanceStatus == "UNMARKED":
@@ -236,7 +234,7 @@ def submit_session(
         session.id,
         "SUBMITTED",
         user_id,
-        datetime.now(timezone.utc),
+        datetime.now(UTC),
     )
     db.commit()
     return _build_session_response(db, session)
@@ -265,7 +263,7 @@ def return_session_for_revision(
         session.id,
         "DRAFT",
         user_id,
-        datetime.now(timezone.utc),
+        datetime.now(UTC),
     )
 
     # Record an audit event preserving the return action
@@ -280,7 +278,7 @@ def return_session_for_revision(
         outcome="SUCCEEDED",
         reason=reason,
         correlation_id=uuid4(),
-        created_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
     )
     db.add(audit_event)
 
@@ -309,7 +307,7 @@ def finalize_session(
         session.id,
         "FINALIZED",
         user_id,
-        datetime.now(timezone.utc),
+        datetime.now(UTC),
     )
     db.commit()
     return _build_session_response(db, session)

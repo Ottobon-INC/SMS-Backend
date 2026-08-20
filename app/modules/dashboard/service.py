@@ -20,9 +20,10 @@ from app.modules.dashboard.schemas import (
     DashboardScope,
     DashboardStudentSummary,
     DashboardSummaryCard,
+    InstitutionDashboardResponse,
     OfficeStaffDashboardResponse,
-    InstitutionDashboardResponse
 )
+
 
 class DashboardService:
     """Build read-only dashboard responses."""
@@ -40,9 +41,9 @@ class DashboardService:
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Tenant scope required.",
             )
-            
+
         resolved_branch_id = context.branch_id
-        
+
         if resolved_branch_id is None:
             # Tenant-scoped user (e.g. Dean) requesting a specific branch
             if requested_branch_id is None:
@@ -56,7 +57,7 @@ class DashboardService:
                     detail="Branch not found in tenant scope.",
                 )
             resolved_branch_id = requested_branch_id
-            
+
         if "dashboard" not in context.enabled_modules:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -65,8 +66,11 @@ class DashboardService:
 
         return OfficeStaffDashboardResponse(**self._build_dashboard(context, resolved_branch_id))
 
-    def get_institution_dashboard(self, context: RequestContext) -> InstitutionDashboardResponse:
-        """Return the operational dashboard aggregated at the tenant scope for Institution Admins/Deans."""
+    def get_institution_dashboard(
+        self,
+        context: RequestContext,
+    ) -> InstitutionDashboardResponse:
+        """Return the operational dashboard aggregated at the tenant scope."""
 
         if context.tenant_id is None:
             raise HTTPException(
@@ -78,7 +82,7 @@ class DashboardService:
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Module disabled.",
             )
-            
+
         payload = self._build_dashboard(context, context.branch_id)
         payload["branch_summaries"] = self.repository.get_branch_summaries(context.tenant_id)
         return InstitutionDashboardResponse(**payload)

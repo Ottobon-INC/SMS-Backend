@@ -5,6 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+
 # Using string literals for UUIDs in response, accepting str in requests
 class AttendanceSessionCreate(BaseModel):
     sectionId: str

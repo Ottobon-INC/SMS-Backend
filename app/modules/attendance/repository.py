@@ -1,18 +1,15 @@
 """Attendance repository for database operations."""
 
 from datetime import date
-"""Attendance repository for database operations."""
-
-from datetime import date
 from typing import Any
 from uuid import UUID
 
 from sqlalchemy import and_, select, update
 from sqlalchemy.orm import Session
 
+from app.modules.academic_structure.models import AcademicProgramme, Batch, Section
 from app.modules.attendance.models import AttendanceRecord, AttendanceSession
 from app.modules.students.models import Enrollment, Student
-from app.modules.academic_structure.models import Section, Batch, AcademicProgramme
 
 
 def get_session_by_id(db: Session, session_id: UUID) -> AttendanceSession | None:
@@ -50,7 +47,7 @@ def get_active_enrollments_for_section(db: Session, section_id: UUID) -> Any:
             and_(
                 Enrollment.section_id == section_id,
                 Enrollment.status == "ACTIVE",
-                Enrollment.is_current == True,
+                Enrollment.is_current.is_(True),
             )
         )
         .order_by(Enrollment.roll_number, Student.legal_name)
@@ -69,7 +66,7 @@ def upsert_attendance_record(db: Session, record: AttendanceRecord) -> Attendanc
     # We will use simple merge or check-and-update since SQLAlchemy ORM merge works well
     # for UUID PKs, but we don't have PK set for updates.
     # It's better to query existing by session_id and enrollment_id, or let the service handle it.
-    
+
     existing = db.execute(
         select(AttendanceRecord).where(
             and_(
@@ -78,7 +75,7 @@ def upsert_attendance_record(db: Session, record: AttendanceRecord) -> Attendanc
             )
         )
     ).scalar_one_or_none()
-    
+
     if existing:
         existing.attendance_status = record.attendance_status
         existing.note = record.note
@@ -92,15 +89,15 @@ def upsert_attendance_record(db: Session, record: AttendanceRecord) -> Attendanc
 
 
 def update_session_status(
-    db: Session, 
-    session_id: UUID, 
-    status: str, 
-    user_id: UUID, 
-    timestamp: Any
+    db: Session,
+    session_id: UUID,
+    status: str,
+    user_id: UUID,
+    timestamp: Any,
 ) -> None:
     """Update the status of a session (e.g. SUBMITTED or FINALIZED)."""
     values = {"status": status, "updated_at": timestamp}
-    
+
     if status == "SUBMITTED":
         values["submitted_by"] = user_id
         values["submitted_at"] = timestamp
@@ -111,7 +108,7 @@ def update_session_status(
         # Clear submission metadata when returning for revision
         values["submitted_by"] = None
         values["submitted_at"] = None
-        
+
     stmt = (
         update(AttendanceSession)
         .where(AttendanceSession.id == session_id)
@@ -135,6 +132,6 @@ def get_sessions_list(
         stmt = stmt.where(AttendanceSession.branch_id == branch_id)
     if status:
         stmt = stmt.where(AttendanceSession.status == status)
-        
+
     stmt = stmt.order_by(AttendanceSession.attendance_date.desc(), Section.section_name)
     return list(db.execute(stmt).all())

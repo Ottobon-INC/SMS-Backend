@@ -10,7 +10,10 @@ from app.core.database.session import get_db_session
 from app.core.security.context import RequestContext
 from app.core.security.dependencies import require_enabled_module
 from app.modules.dashboard.repository import DashboardRepository
-from app.modules.dashboard.schemas import InstitutionDashboardResponse, OfficeStaffDashboardResponse
+from app.modules.dashboard.schemas import (
+    InstitutionDashboardResponse,
+    OfficeStaffDashboardResponse,
+)
 from app.modules.dashboard.service import DashboardService
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
@@ -25,7 +28,10 @@ def get_office_staff_dashboard(
 ) -> OfficeStaffDashboardResponse:
     """Return the branch-scoped Office Staff operational dashboard."""
 
-    return DashboardService(DashboardRepository(session)).get_office_staff_dashboard(context, branch_id)
+    return DashboardService(DashboardRepository(session)).get_office_staff_dashboard(
+        context,
+        branch_id,
+    )
 
 
 @router.get("/institution", response_model=InstitutionDashboardResponse)
@@ -35,4 +41,6 @@ def get_institution_dashboard(
 ) -> InstitutionDashboardResponse:
     """Return the tenant-scoped Institution dashboard."""
 
-    return DashboardService(DashboardRepository(session)).get_institution_dashboard(context)
+    return DashboardService(DashboardRepository(session)).get_institution_dashboard(
+        context,
+    )
