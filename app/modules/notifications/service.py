@@ -115,7 +115,12 @@ class WhatsAppNotificationService:
         ).fetchone()
 
         subject_marks = (rec_row.subject_marks if rec_row else {}) or {}
-
+        if isinstance(subject_marks, str):
+            import json
+            try:
+                subject_marks = json.loads(subject_marks)
+            except:
+                subject_marks = {}
         sub_rows = self.db.execute(
             text("SELECT id, subject_id, subject_name, subject_code, maximum_marks, pass_marks FROM sms_exam_subjects WHERE exam_id = :exam_id"),
             {"exam_id": exam_id},

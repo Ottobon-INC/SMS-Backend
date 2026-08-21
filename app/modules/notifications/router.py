@@ -12,7 +12,8 @@ from sqlalchemy.orm import Session
 
 from app.core.config.settings import settings
 from app.core.database.session import get_session_factory
-from app.core.security.dependencies import resolve_tenant_id
+from app.core.security.context import RequestContext
+from app.core.security.dependencies import require_any_permission, require_tenant_scope
 from app.modules.notifications.models import NotificationLog
 from app.modules.notifications.repository import NotificationsRepository
 from app.modules.notifications.schemas import (
@@ -71,20 +72,23 @@ def receive_meta_webhook_callbacks(
 
 @router.get("/logs", response_model=list[NotificationLogRead])
 def list_notification_logs(
-    tenant_id: UUID = Depends(resolve_tenant_id),
     branch_id: UUID | None = Query(None),
     limit: int = Query(100, ge=1, le=500),
     db: Session = Depends(get_db),
+    context: RequestContext = Depends(require_tenant_scope),
+    _: RequestContext = Depends(require_any_permission({"notification.view"})),
 ):
     """List notification outbox logs with RBAC branch filtering."""
     repo = NotificationsRepository(db)
-    return repo.list_logs(tenant_id=tenant_id, branch_id=branch_id, limit=limit)
+    return repo.list_logs(tenant_id=context.tenant_id, branch_id=branch_id, limit=limit)
 
 
 @router.get("/progress/{entity_id}", response_model=DispatchProgressResponse)
 def get_dispatch_progress(
     entity_id: str,
     db: Session = Depends(get_db),
+    context: RequestContext = Depends(require_tenant_scope),
+    _: RequestContext = Depends(require_any_permission({"notification.view"})),
 ):
     """Query completion percentage and ongoing state for an assessment or section."""
     repo = NotificationsRepository(db)
@@ -116,6 +120,8 @@ class UpdateGuardianPhoneRequest(BaseModel):
 def update_guardian_phone(
     payload: UpdateGuardianPhoneRequest,
     db: Session = Depends(get_db),
+    context: RequestContext = Depends(require_tenant_scope),
+    _: RequestContext = Depends(require_any_permission({"notification.view"})),
 ):
     """Save or update guardian mobile phone number for a student."""
     link = db.execute(

@@ -3,6 +3,7 @@
 """Examinations service layer for business logic execution."""
 
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import text
@@ -408,6 +409,17 @@ FINAL STATUS     : {final_status}
         print(f"Total WhatsApp Dispatches Logged: {dispatched_count}")
         print("=" * 80 + "\n")
 
+        published_exam = self.repo.update_exam(
+            exam_id,
+            tenant_id,
+            {
+                "status": "PUBLISHED",
+                "published_at": datetime.now(),
+                "published_by": user_id,
+                "updated_at": datetime.now(),
+            },
+        )
+
         if background_tasks:
             print("[PUBLISH] >>> background_tasks available, triggering WhatsApp notifications...")
             try:
@@ -420,26 +432,12 @@ FINAL STATUS     : {final_status}
                 )
                 print(f"[PUBLISH] >>> Notification trigger result: {result}")
             except Exception as notif_err:
-                # Rollback the aborted transaction so subsequent DB calls (update_exam) can still run
-                try:
-                    self.repo.db.rollback()
-                except Exception:
-                    pass
                 print(f"[PUBLISH] !!! Notification service trigger WARNING (non-fatal): {notif_err}")
         else:
             print("[PUBLISH] !!! background_tasks is None/falsy - notifications will NOT be sent!")
 
 
-        return self.repo.update_exam(
-            exam_id,
-            tenant_id,
-            {
-                "status": "PUBLISHED",
-                "published_at": datetime.now(),
-                "published_by": user_id,
-                "updated_at": datetime.now(),
-            },
-        )
+        return published_exam
 
     def get_exam_subjects(self, exam_id: UUID, tenant_id: UUID) -> list[ExamSubject]:
         return self.repo.list_exam_subjects(exam_id, tenant_id)
