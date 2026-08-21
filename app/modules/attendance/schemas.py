@@ -41,6 +41,7 @@ class AttendanceSessionResponse(BaseModel):
     submittedAt: datetime | None = None
     finalizedBy: str | None = None
     finalizedAt: datetime | None = None
+    revisionReason: str | None = None
     students: list[AttendanceStudentResponse] = Field(default_factory=list)
 
 class AttendanceSessionListItem(BaseModel):

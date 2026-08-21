@@ -81,6 +81,18 @@ def _build_session_response(
             )
         )
 
+    revision_reason = None
+    if session.status == "DRAFT":
+        from sqlalchemy import desc
+        latest_return_audit = (
+            db.query(AuditEvent)
+            .filter_by(target_id=session.id, action_key="ATTENDANCE_RETURNED_FOR_REVISION")
+            .order_by(desc("created_at"))
+            .first()
+        )
+        if latest_return_audit:
+            revision_reason = getattr(latest_return_audit, "reason", None)
+
     return schemas.AttendanceSessionResponse(
         id=str(session.id),
         tenantId=str(session.tenant_id),
@@ -94,6 +106,7 @@ def _build_session_response(
         submittedAt=session.submitted_at,
         finalizedBy=_get_user_name(db, session.finalized_by),
         finalizedAt=session.finalized_at,
+        revisionReason=revision_reason,
         students=students,
     )
 
@@ -316,18 +329,28 @@ def finalize_session(
     if background_tasks:
         try:
             records = repository.get_records_for_session(db, session.id)
-            absent_enrollment_ids = [r.enrollment_id for r in records if r.attendance_status == "ABSENT"]
+            absent_enrollment_ids = [
+                r.enrollment_id for r in records if r.attendance_status == "ABSENT"
+            ]
 
             if absent_enrollment_ids:
                 from sqlalchemy import text
+
                 from app.modules.notifications.service import WhatsAppNotificationService
+
                 stu_rows = db.execute(
-                    text("SELECT student_id FROM sms_enrollments WHERE id::text = ANY(CAST(:e_ids AS text[]))"),
-                    {"e_ids": [str(e) for e in absent_enrollment_ids]}
+                    text(
+                        "SELECT student_id FROM sms_enrollments "
+                        "WHERE id::text = ANY(CAST(:e_ids AS text[]))"
+                    ),
+                    {"e_ids": [str(e) for e in absent_enrollment_ids]},
                 ).fetchall()
                 absent_student_ids = [r.student_id for r in stu_rows]
 
-                sec_row = db.execute(text("SELECT section_name FROM sms_sections WHERE id = :id"), {"id": session.section_id}).first()
+                sec_row = db.execute(
+                    text("SELECT section_name FROM sms_sections WHERE id = :id"),
+                    {"id": session.section_id},
+                ).first()
                 section_name = sec_row.section_name if sec_row else "Default"
 
                 notif_svc = WhatsAppNotificationService(db)
