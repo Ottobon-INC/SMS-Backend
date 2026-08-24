@@ -423,7 +423,7 @@ def assign_branch_programmes(
 
             for yr_level, yr_name, yr_code in [("1", "First Year", "FY"), ("2", "Second Year", "SY")]:
                 batch_code = f"{prog_code}-{branch_hex}-{yr_code}"
-                batch_name = f"{prog_code} {yr_name} ({branch_hex})"
+                batch_name = f"{prog_code} {yr_name}"
 
                 existing_batch = db.execute(
                     text("""
@@ -446,8 +446,15 @@ def assign_branch_programmes(
                 if existing_batch:
                     batch_id_uuid = existing_batch.id
                     db.execute(
-                        text("UPDATE sms_batches SET status = 'ACTIVE', programme_id = :prog_id, updated_at = NOW() WHERE id = :id"),
-                        {"id": batch_id_uuid, "prog_id": prog_id_uuid},
+                        text("""
+                            UPDATE sms_batches
+                            SET status = 'ACTIVE',
+                                programme_id = :prog_id,
+                                batch_name = :name,
+                                updated_at = NOW()
+                            WHERE id = :id
+                        """),
+                        {"id": batch_id_uuid, "prog_id": prog_id_uuid, "name": batch_name},
                     )
                 else:
                     batch_id_uuid = uuid.uuid4()
@@ -476,8 +483,8 @@ def assign_branch_programmes(
                     )
 
                 # Ensure default section A exists for this batch
-                sec_code = f"{prog_code}-{yr_level}A-{branch_hex}"
-                sec_name = f"{prog_code}-{yr_level}A"
+                sec_code = f"{prog_code}-{yr_level}A"
+                sec_name = f"{prog_code}-A"
                 existing_section = db.execute(
                     text("""
                         SELECT id FROM sms_sections

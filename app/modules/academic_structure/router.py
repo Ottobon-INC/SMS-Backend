@@ -8,7 +8,7 @@ import json
 import uuid
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -303,4 +303,190 @@ def create_programme(
         "coachingTrack": res.coaching_track,
         "yearLevel": res.year_level,
         "subjectIds": res.subject_ids or [],
+    }
+
+
+def _clean_section_suffix(value: str) -> str:
+    suffix = (value or "").strip().upper()
+    if suffix.startswith("SECTION "):
+        suffix = suffix.replace("SECTION ", "", 1).strip()
+    if not suffix or len(suffix) > 3 or not suffix.isalnum():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Section must be 1 to 3 letters or numbers, such as A, B, or C.",
+        )
+    return suffix
+
+
+def _display_section_name(section_name: str, section_code: str) -> str:
+    value = section_name or section_code
+    parts = value.split("-")
+    if len(parts) >= 2 and parts[1][:1] in {"1", "2"}:
+        return f"{parts[0]}-{parts[1][1:]}"
+    return value
+
+
+@router.get("/sections")
+def get_academic_sections(
+    branch_id: UUID,
+    academic_year_id: UUID,
+    programme_id: UUID,
+    tenant_id: UUID = Depends(resolve_tenant_id),
+    db: Session = Depends(get_db_session),
+):
+    rows = db.execute(
+        text("""
+            SELECT
+                bt.id AS batch_id,
+                bt.batch_code,
+                bt.batch_name,
+                bt.year_level,
+                s.id AS section_id,
+                s.section_code,
+                s.section_name,
+                s.capacity,
+                s.status AS section_status
+            FROM sms_batches bt
+            LEFT JOIN sms_sections s
+                ON s.tenant_id = bt.tenant_id
+                AND s.branch_id = bt.branch_id
+                AND s.batch_id = bt.id
+                AND s.status = 'ACTIVE'
+            WHERE bt.tenant_id = :tenant_id
+                AND bt.branch_id = :branch_id
+                AND bt.academic_year_id = :academic_year_id
+                AND bt.programme_id = :programme_id
+                AND bt.status = 'ACTIVE'
+            ORDER BY bt.year_level, bt.batch_name, s.section_name
+        """),
+        {
+            "tenant_id": tenant_id,
+            "branch_id": branch_id,
+            "academic_year_id": academic_year_id,
+            "programme_id": programme_id,
+        },
+    ).fetchall()
+
+    batches: dict[str, dict] = {}
+    for row in rows:
+        batch_id = str(row.batch_id)
+        batches.setdefault(
+            batch_id,
+            {
+                "id": batch_id,
+                "code": row.batch_code,
+                "name": row.batch_name,
+                "yearLevel": row.year_level,
+                "sections": [],
+            },
+        )
+        if row.section_id:
+            batches[batch_id]["sections"].append(
+                {
+                    "id": str(row.section_id),
+                    "code": row.section_code,
+                    "name": _display_section_name(row.section_name, row.section_code),
+                    "capacity": row.capacity,
+                    "status": row.section_status,
+                }
+            )
+
+    return list(batches.values())
+
+
+@router.post("/sections")
+def create_academic_section(
+    payload: dict,
+    tenant_id: UUID = Depends(resolve_tenant_id),
+    user_id: UUID = Depends(resolve_user_id),
+    db: Session = Depends(get_db_session),
+):
+    batch_id = payload.get("batchId") or payload.get("batch_id")
+    section_suffix = _clean_section_suffix(payload.get("section") or payload.get("sectionName") or "")
+    capacity = payload.get("capacity")
+
+    batch = db.execute(
+        text("""
+            SELECT
+                bt.id,
+                bt.branch_id,
+                bt.year_level,
+                p.programme_code
+            FROM sms_batches bt
+            JOIN sms_academic_programmes p
+                ON p.tenant_id = bt.tenant_id
+                AND p.id = bt.programme_id
+            WHERE bt.tenant_id = :tenant_id
+                AND bt.id = :batch_id
+                AND bt.status = 'ACTIVE'
+                AND p.status = 'ACTIVE'
+        """),
+        {"tenant_id": tenant_id, "batch_id": batch_id},
+    ).fetchone()
+    if batch is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Active batch not found.")
+
+    section_code = f"{batch.programme_code}-{batch.year_level}{section_suffix}"
+    section_name = f"{batch.programme_code}-{section_suffix}"
+
+    existing = db.execute(
+        text("""
+            SELECT id
+            FROM sms_sections
+            WHERE tenant_id = :tenant_id
+                AND branch_id = :branch_id
+                AND batch_id = :batch_id
+                AND (
+                    upper(section_code) = upper(:section_code)
+                    OR upper(section_name) = upper(:section_name)
+                    OR upper(regexp_replace(section_code, '-[[:xdigit:]]{4}$', '')) = upper(:section_code)
+                    OR upper(regexp_replace(section_name, '-([12])([[:alnum:]]+)$', '-\\2')) = upper(:section_name)
+                )
+                AND status = 'ACTIVE'
+        """),
+        {
+            "tenant_id": tenant_id,
+            "branch_id": batch.branch_id,
+            "batch_id": batch.id,
+            "section_code": section_code,
+            "section_name": section_name,
+        },
+    ).fetchone()
+    if existing is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Section {section_name} already exists for this batch.",
+        )
+
+    row = db.execute(
+        text("""
+            INSERT INTO sms_sections (
+                id, tenant_id, branch_id, batch_id, section_code, section_name,
+                capacity, status, created_by, created_at, updated_at
+            )
+            VALUES (
+                :id, :tenant_id, :branch_id, :batch_id, :section_code, :section_name,
+                :capacity, 'ACTIVE', :user_id, NOW(), NOW()
+            )
+            RETURNING id, section_code, section_name, capacity, status
+        """),
+        {
+            "id": uuid.uuid4(),
+            "tenant_id": tenant_id,
+            "branch_id": batch.branch_id,
+            "batch_id": batch.id,
+            "section_code": section_code,
+            "section_name": section_name,
+            "capacity": capacity,
+            "user_id": user_id,
+        },
+    ).fetchone()
+    db.commit()
+
+    return {
+        "id": str(row.id),
+        "code": row.section_code,
+        "name": row.section_name,
+        "capacity": row.capacity,
+        "status": row.status,
     }
