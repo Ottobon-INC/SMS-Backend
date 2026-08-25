@@ -185,6 +185,16 @@ class ImportService:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This file hash is already used by another import type.")
             if context_branch_id and existing_batch.branch_id and existing_batch.branch_id != context_branch_id:
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized for this batch.")
+            if existing_batch.status in {"UPLOADED", "PREVIEW", "FAILED"}:
+                return self._revalidate_fee_batch(
+                    batch=existing_batch,
+                    tenant_id=tenant_id,
+                    branch_id=branch_id,
+                    app_user_id=app_user_id,
+                    file_content=file_content,
+                    filename=filename,
+                    context_branch_id=context_branch_id,
+                )
             return UploadResponse(
                 message="This fee file was already uploaded. Opening the existing validation preview.",
                 batch_id=existing_batch.id,
@@ -243,6 +253,61 @@ class ImportService:
 
         return UploadResponse(
             message="Fee file uploaded and validated.",
+            batch_id=batch.id,
+            status=batch.status,
+        )
+
+    def _revalidate_fee_batch(
+        self,
+        batch: ImportBatch,
+        tenant_id: UUID,
+        branch_id: UUID | None,
+        app_user_id: UUID,
+        file_content: bytes,
+        filename: str,
+        context_branch_id: UUID | None,
+    ) -> UploadResponse:
+        batch.branch_id = branch_id
+        batch.source_filename = filename
+        batch.status = "UPLOADED"
+        batch.created_by = app_user_id
+        self.repository.delete_rows_for_batch(batch.id)
+
+        effective_branch_id = context_branch_id or branch_id
+        validator = FeeImportValidator(self.repository, tenant_id, effective_branch_id)
+
+        try:
+            row_results, summary = validator.parse_and_validate(file_content)
+        except ValueError as e:
+            batch.status = "FAILED"
+            self.repository.update_batch(batch)
+            self.session.commit()
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+
+        batch.summary = summary
+        batch.status = "PREVIEW"
+        self.repository.update_batch(batch)
+
+        self.repository.create_rows(
+            [
+                ImportRow(
+                    id=uuid.uuid4(),
+                    batch_id=batch.id,
+                    row_number=res["row_number"],
+                    raw_data=res["raw_data"],
+                    normalized_data=res["normalized_data"],
+                    validation_status=res["validation_status"],
+                    errors=res["errors"],
+                    proposed_action="CREATE_FEE_ACCOUNT",
+                    target_entity_type="FeeAccount",
+                )
+                for res in row_results
+            ]
+        )
+        self.session.commit()
+
+        return UploadResponse(
+            message="Fee file revalidated with the latest import rules.",
             batch_id=batch.id,
             status=batch.status,
         )
@@ -472,7 +537,13 @@ class ImportService:
                     e.admission_number,
                     s.legal_name AS student_name,
                     ay.name AS academic_year,
+                    ap.programme_code,
                     ap.programme_name,
+                    CASE
+                        WHEN ap.programme_code IS NOT NULL AND ap.programme_name IS NOT NULL
+                            THEN ap.programme_code || ' - ' || ap.programme_name
+                        ELSE COALESCE(ap.programme_name, ap.programme_code)
+                    END AS programme_display,
                     sec.section_name,
                     b.display_name AS branch_name
                 FROM sms_enrollments e
@@ -537,6 +608,7 @@ class ImportService:
             ("Fee Import Template", "Use this template to set up fee accounts in bulk for active student enrollments."),
             ("Required columns", ", ".join(sorted(required_headers))),
             ("Admission No", "Must match an active enrollment shown on the Eligible Enrollments sheet."),
+            ("Programme / Stream", "Use the displayed value from Eligible Enrollments, for example: MPC - Mathematics, Physics, Chemistry. The validator also accepts the short code such as MPC."),
             ("Assigned Fee", "Enter the total gross fee assigned to the student for the selected academic year."),
             ("Government Scholarship", "Enter scholarship amount if applicable. Use 0 when not applicable."),
             ("Concession", "Enter institution concession amount if applicable. Use 0 when not applicable."),
@@ -561,7 +633,7 @@ class ImportService:
             references.cell(row=row_index, column=1, value=row.admission_number)
             references.cell(row=row_index, column=2, value=row.student_name)
             references.cell(row=row_index, column=3, value=row.academic_year)
-            references.cell(row=row_index, column=4, value=row.programme_name)
+            references.cell(row=row_index, column=4, value=row.programme_display)
             references.cell(row=row_index, column=5, value=row.section_name)
             references.cell(row=row_index, column=6, value=row.branch_name)
         references.freeze_panes = "A2"
@@ -735,6 +807,52 @@ class ImportService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Import row not found.")
 
         target_row.raw_data = raw_data
+        return self._revalidate_fee_preview_rows(
+            batch=batch,
+            rows=rows,
+            tenant_id=tenant_id,
+            context_branch_id=context_branch_id,
+        )
+
+    def correct_fee_import_rows(
+        self,
+        batch_id: UUID,
+        tenant_id: UUID,
+        corrections: list[ImportRowBulkCorrection],
+        context_branch_id: UUID | None,
+    ) -> PreviewResponse:
+        batch = self.repository.get_batch(batch_id)
+        if not batch or batch.tenant_id != tenant_id or batch.module_code != "fees":
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fee import batch not found.")
+        if context_branch_id and batch.branch_id and batch.branch_id != context_branch_id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized for this batch.")
+        if batch.status not in ["PREVIEW", "FAILED"]:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only preview batches can be corrected.")
+        if not corrections:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No row corrections were provided.")
+
+        rows = list(self.repository.get_rows(batch_id))
+        rows_by_id = {row.id: row for row in rows}
+        for correction in corrections:
+            target_row = rows_by_id.get(correction.row_id)
+            if target_row is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Import row not found.")
+            target_row.raw_data = correction.raw_data
+
+        return self._revalidate_fee_preview_rows(
+            batch=batch,
+            rows=rows,
+            tenant_id=tenant_id,
+            context_branch_id=context_branch_id,
+        )
+
+    def _revalidate_fee_preview_rows(
+        self,
+        batch: ImportBatch,
+        rows: list[ImportRow],
+        tenant_id: UUID,
+        context_branch_id: UUID | None,
+    ) -> PreviewResponse:
         headers = [
             "Admission No",
             "Student Name",
@@ -765,12 +883,15 @@ class ImportService:
             import_row.normalized_data = result["normalized_data"]
             import_row.validation_status = result["validation_status"]
             import_row.errors = result["errors"]
-            self.repository.update_batch(batch)
+            import_row.proposed_action = "CREATE_FEE_ACCOUNT"
+            import_row.target_entity_type = "FeeAccount"
+            self.session.add(import_row)
 
         batch.summary = summary
         batch.status = "PREVIEW"
+        self.repository.update_batch(batch)
         self.session.commit()
-        return self.get_import_preview(batch_id, tenant_id, context_branch_id, expected_module_code="fees")
+        return self.get_import_preview(batch.id, tenant_id, context_branch_id, expected_module_code="fees")
 
     def commit_student_import(self, batch_id: UUID, tenant_id: UUID, app_user_id: UUID, context_branch_id: UUID | None) -> dict[str, Any]:
         batch = self.repository.get_batch(batch_id)

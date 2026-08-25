@@ -283,7 +283,13 @@ class ImportRepository:
                     s.legal_name,
                     s.display_name,
                     ay.name AS academic_year,
+                    ap.programme_code,
                     ap.programme_name,
+                    CASE
+                        WHEN ap.programme_code IS NOT NULL AND ap.programme_name IS NOT NULL
+                            THEN ap.programme_code || ' - ' || ap.programme_name
+                        ELSE COALESCE(ap.programme_name, ap.programme_code)
+                    END AS programme_display,
                     sec.section_name,
                     fa.id AS fee_account_id
                 FROM sms_enrollments e

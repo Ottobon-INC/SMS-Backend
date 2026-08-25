@@ -118,6 +118,22 @@ def correct_fee_batch_row(
     )
 
 
+@fee_router.patch("/batches/{batch_id}/rows", response_model=PreviewResponse)
+def correct_fee_batch_rows(
+    batch_id: UUID,
+    payload: ImportRowsCorrectionRequest,
+    context: RequestContext = Depends(require_permission(IMPORT_UPLOAD)),
+    service: ImportService = Depends(get_import_service),
+):
+    assert context.tenant_id is not None
+    return service.correct_fee_import_rows(
+        batch_id=batch_id,
+        tenant_id=context.tenant_id,
+        corrections=payload.rows,
+        context_branch_id=context.branch_id,
+    )
+
+
 @fee_router.post("/batches/{batch_id}/commit")
 def commit_fee_import(
     batch_id: UUID,

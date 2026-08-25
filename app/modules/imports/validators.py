@@ -418,6 +418,37 @@ class FeeImportValidator:
             return None
         return parsed.quantize(Decimal("0.01"))
 
+    def _normalize_compare(self, value: Any) -> str:
+        return " ".join(self._clean_string(value).lower().split())
+
+    def _programme_matches(self, value: str, enrollment: dict[str, Any]) -> bool:
+        normalized_value = self._normalize_compare(value)
+        if not normalized_value:
+            return True
+        candidates = [
+            enrollment.get("programme_code"),
+            enrollment.get("programme_name"),
+            enrollment.get("programme_display"),
+        ]
+        normalized_candidates = {
+            self._normalize_compare(candidate)
+            for candidate in candidates
+            if candidate
+        }
+        return normalized_value in normalized_candidates
+
+    def _section_matches(self, value: str, enrollment: dict[str, Any]) -> bool:
+        normalized_value = self._normalize_compare(value)
+        if not normalized_value:
+            return True
+        candidates = [enrollment.get("section_name")]
+        normalized_candidates = {
+            self._normalize_compare(candidate)
+            for candidate in candidates
+            if candidate
+        }
+        return normalized_value in normalized_candidates
+
     def parse_and_validate(self, file_content: bytes) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         wb = openpyxl.load_workbook(io.BytesIO(file_content), data_only=True)
         sheet = wb.active
@@ -490,6 +521,16 @@ class FeeImportValidator:
                 errors.append({"field": "Payment Schedule Type", "message": "Must be one of ONE_TIME, TERM_WISE, INSTALLMENT_WISE, CUSTOM."})
                 status = "REJECTED"
 
+            for optional_label, optional_value in (
+                ("Student Name", student_name),
+                ("Programme / Stream", programme),
+                ("Section", section),
+            ):
+                if not optional_value:
+                    errors.append({"field": optional_label, "message": "Optional field missing; it will be verified from active enrollment during import."})
+                    if status == "VALID":
+                        status = "WARNING"
+
             assigned_amount = assigned_fee or Decimal("0")
             scholarship_amount = scholarship or Decimal("0")
             concession_amount = concession or Decimal("0")
@@ -526,12 +567,13 @@ class FeeImportValidator:
                         errors.append({"field": "Student Name", "message": "Student name differs from the active enrollment. Verify before finalizing."})
                         if status == "VALID":
                             status = "WARNING"
-                    if programme and enrollment["programme_name"] and programme.lower() != enrollment["programme_name"].lower():
-                        errors.append({"field": "Programme / Stream", "message": "Programme differs from the active enrollment. Verify before finalizing."})
+                    if programme and not self._programme_matches(programme, enrollment):
+                        expected_programme = enrollment.get("programme_display") or enrollment.get("programme_name") or enrollment.get("programme_code")
+                        errors.append({"field": "Programme / Stream", "message": f"Programme differs from the active enrollment. Expected {expected_programme}."})
                         if status == "VALID":
                             status = "WARNING"
-                    if section and enrollment["section_name"] and section.lower() != enrollment["section_name"].lower():
-                        errors.append({"field": "Section", "message": "Section differs from the active enrollment. Verify before finalizing."})
+                    if section and not self._section_matches(section, enrollment):
+                        errors.append({"field": "Section", "message": f"Section differs from the active enrollment. Expected {enrollment.get('section_name')}."})
                         if status == "VALID":
                             status = "WARNING"
 
