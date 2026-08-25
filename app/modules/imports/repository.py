@@ -60,12 +60,24 @@ class ImportRepository:
         )
         return self.session.scalars(stmt).first()
 
-    def resolve_programme(self, tenant_id: UUID, name: str) -> AcademicProgramme | None:
-        stmt = select(AcademicProgramme).where(
-            AcademicProgramme.tenant_id == tenant_id,
-            (AcademicProgramme.programme_name == name) | (AcademicProgramme.programme_code == name)
-        )
-        return self.session.scalars(stmt).first()
+    def resolve_programme(self, tenant_id: UUID, name: str) -> Any | None:
+        normalized_name = name.strip()
+        return self.session.execute(
+            text("""
+                SELECT *
+                FROM sms_academic_programmes
+                WHERE tenant_id = :tenant_id
+                    AND status = 'ACTIVE'
+                    AND (
+                        lower(programme_name) = lower(:name)
+                        OR lower(programme_code) = lower(:name)
+                        OR lower(programme_code || ' - ' || programme_name) = lower(:name)
+                    )
+                ORDER BY programme_code
+                LIMIT 1
+            """),
+            {"tenant_id": tenant_id, "name": normalized_name},
+        ).fetchone()
 
     def resolve_batch(
         self, tenant_id: UUID, branch_id: UUID, academic_year_id: UUID, programme_id: UUID, name: str
@@ -95,6 +107,8 @@ class ImportRepository:
         academic_year_id: UUID,
         programme_id: UUID,
         section_name_or_code: str,
+        batch_name_or_code: str | None = None,
+        year_level: str | None = None,
     ) -> Any | None:
         return self.session.execute(
             text("""
@@ -114,6 +128,15 @@ class ImportRepository:
                     AND s.status = 'ACTIVE'
                     AND bt.status = 'ACTIVE'
                     AND (
+                        :batch_value IS NULL
+                        OR lower(bt.batch_name) = lower(:batch_value)
+                        OR lower(bt.batch_code) = lower(:batch_value)
+                    )
+                    AND (
+                        :year_level IS NULL
+                        OR bt.year_level = :year_level
+                    )
+                    AND (
                         lower(s.section_name) = lower(:section_value)
                         OR lower(s.section_code) = lower(:section_value)
                     )
@@ -126,6 +149,8 @@ class ImportRepository:
                 "academic_year_id": academic_year_id,
                 "programme_id": programme_id,
                 "section_value": section_name_or_code,
+                "batch_value": batch_name_or_code or None,
+                "year_level": year_level or None,
             },
         ).fetchone()
 

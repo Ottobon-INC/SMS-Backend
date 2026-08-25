@@ -192,6 +192,8 @@ class ImportService:
             "Student Email",
             "Academic Year",
             "Programme / Stream",
+            "Year Level",
+            "Batch",
             "Section",
             "Roll No",
             "Joining Date",
@@ -209,6 +211,8 @@ class ImportService:
             "Date Of Birth",
             "Academic Year",
             "Programme / Stream",
+            "Year Level",
+            "Batch",
             "Section",
             "Joining Date",
             "Guardian Name",
@@ -234,7 +238,9 @@ class ImportService:
                 SELECT
                     b.display_name AS branch_name,
                     ay.name AS academic_year,
+                    ap.programme_code,
                     ap.programme_name,
+                    bt.year_level,
                     bt.batch_name,
                     s.section_name,
                     s.section_code
@@ -302,8 +308,10 @@ class ImportService:
             ("Dates", "Use YYYY-MM-DD format for Date Of Birth, Joining Date, and Ending Date."),
             ("Admission No", "Must be unique within the branch. Existing or duplicate admission numbers will be rejected."),
             ("Student Name", "Same names are allowed, but name + DOB + guardian mobile may produce duplicate warnings in preview."),
-            ("Programme / Stream", "Must match an active programme from the Reference Values sheet."),
-            ("Section", "Must match an active section for the selected branch, academic year, and programme."),
+            ("Programme / Stream", "Use the displayed value from Reference Values, for example: MPC - Mathematics, Physics, Chemistry."),
+            ("Year Level", "Use First Year or Second Year. This prevents section ambiguity across two-year programmes."),
+            ("Batch", "Must match the exact batch from Reference Values, for example: MPC First Year."),
+            ("Section", "Use the clean section label from Reference Values, for example: MPC-A or BIPC-B."),
             ("Relationship", "Use one of: FATHER, MOTHER, LEGAL_GUARDIAN, RELATIVE, SPONSOR, OTHER."),
             ("Preview before commit", "Upload validates rows first. Records are inserted only after preview confirmation."),
         ]
@@ -317,9 +325,29 @@ class ImportService:
         reference_sections = [
             ("Branches", ["Branch Code", "Branch Name"], [(row.branch_code, row.display_name) for row in branches]),
             ("Academic Years", ["Academic Year"], [(year.name,) for year in academic_years]),
-            ("Programmes", ["Programme / Stream"], [(programme.programme_name,) for programme in programmes]),
-            ("Sections", ["Branch", "Academic Year", "Programme / Stream", "Batch", "Section", "Section Code"], [
-                (row.branch_name, row.academic_year, row.programme_name, row.batch_name, row.section_name, row.section_code)
+            (
+                "Programmes",
+                ["Programme / Stream", "Programme Code", "Programme Name"],
+                [
+                    (
+                        f"{programme.programme_code} - {programme.programme_name}",
+                        programme.programme_code,
+                        programme.programme_name,
+                    )
+                    for programme in programmes
+                ],
+            ),
+            ("Year Levels", ["Year Level"], [("First Year",), ("Second Year",)]),
+            ("Sections", ["Branch", "Academic Year", "Programme / Stream", "Year Level", "Batch", "Section", "Section Code"], [
+                (
+                    row.branch_name,
+                    row.academic_year,
+                    f"{row.programme_code} - {row.programme_name}",
+                    "First Year" if str(row.year_level) == "1" else "Second Year",
+                    row.batch_name,
+                    row.section_name,
+                    row.section_code,
+                )
                 for row in sections
             ]),
             ("Allowed Gender Values", ["Gender"], [("MALE",), ("FEMALE",), ("OTHER",)]),
@@ -348,7 +376,7 @@ class ImportService:
         sheet.add_data_validation(gender_validation)
         sheet.add_data_validation(relationship_validation)
         gender_validation.add(f"C3:C{max_data_row}")
-        relationship_validation.add(f"N3:N{max_data_row}")
+        relationship_validation.add(f"P3:P{max_data_row}")
 
         output = BytesIO()
         workbook.save(output)
@@ -533,6 +561,8 @@ class ImportService:
             "Student Email",
             "Academic Year",
             "Programme / Stream",
+            "Year Level",
+            "Batch",
             "Section",
             "Roll No",
             "Joining Date",

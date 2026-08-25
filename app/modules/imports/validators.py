@@ -23,6 +23,8 @@ class StudentImportValidator:
             "date_of_birth": ["Date Of Birth", "Date of Birth"],
             "academic_year": ["Academic Year"],
             "programme": ["Programme / Stream"],
+            "year_level": ["Year Level"],
+            "batch": ["Batch"],
             "section": ["Section"],
             "joining_date": ["Joining Date"],
             "guardian_name": ["Guardian Name"],
@@ -37,8 +39,6 @@ class StudentImportValidator:
             "ending_date": ["Ending Date"],
             "guardian_email": ["Guardian Email"],
             "student_created": ["Student Created"],
-            "batch": ["Batch"],
-            "year_level": ["Year Level"],
         }
 
     def _header_map(self, headers: tuple[Any, ...]) -> dict[str, int]:
@@ -81,6 +81,14 @@ class StudentImportValidator:
             except ValueError:
                 continue
         return None
+
+    def _normalize_year_level(self, value: str) -> str:
+        normalized = value.strip().lower().replace("_", " ").replace("-", " ")
+        if normalized in {"1", "first", "first year", "year 1", "fy"}:
+            return "1"
+        if normalized in {"2", "second", "second year", "year 2", "sy"}:
+            return "2"
+        return ""
 
     def parse_and_validate(self, file_content: bytes) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         wb = openpyxl.load_workbook(io.BytesIO(file_content), data_only=True)
@@ -139,6 +147,8 @@ class StudentImportValidator:
             student_email = self._clean_string(self._value(row_values, columns, "student_email"))
             academic_year_str = self._clean_string(self._value(row_values, columns, "academic_year"))
             programme_str = self._clean_string(self._value(row_values, columns, "programme"))
+            year_level_label = self._clean_string(self._value(row_values, columns, "year_level"))
+            batch_str = self._clean_string(self._value(row_values, columns, "batch"))
             section_str = self._clean_string(self._value(row_values, columns, "section"))
             roll_number = self._clean_string(self._value(row_values, columns, "roll_number"))
             joining_date = self._value(row_values, columns, "joining_date")
@@ -176,6 +186,12 @@ class StudentImportValidator:
                 status = "REJECTED"
             if not guardian_mobile:
                 errors.append({"field": "Guardian Mobile", "message": "Required field missing."})
+                status = "REJECTED"
+            if not year_level_label:
+                errors.append({"field": "Year Level", "message": "Required field missing."})
+                status = "REJECTED"
+            if not batch_str:
+                errors.append({"field": "Batch", "message": "Required field missing."})
                 status = "REJECTED"
             if gender not in ["MALE", "FEMALE", "OTHER"]:
                 errors.append({"field": "Gender", "message": "Must be one of MALE, FEMALE, OTHER."})
@@ -225,7 +241,10 @@ class StudentImportValidator:
 
             batch_id = None
             section_id = None
-            year_level = self._clean_string(self._value(row_values, columns, "year_level"))
+            year_level = self._normalize_year_level(year_level_label)
+            if year_level_label and not year_level:
+                errors.append({"field": "Year Level", "message": "Must be First Year or Second Year."})
+                status = "REJECTED"
             if section_str and academic_year_id and programme_id and row_branch_id:
                 placement = self.repository.resolve_section_placement(
                     self.tenant_id,
@@ -233,9 +252,11 @@ class StudentImportValidator:
                     academic_year_id,
                     programme_id,
                     section_str,
+                    batch_str,
+                    year_level,
                 )
                 if not placement:
-                    errors.append({"field": "Section", "message": f"Not found: {section_str} for selected branch/year/programme."})
+                    errors.append({"field": "Section", "message": f"Not found: {section_str} for selected branch/year/programme/batch."})
                     status = "REJECTED"
                 else:
                     batch_id = placement.batch_id
