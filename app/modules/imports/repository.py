@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select, text
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.orm import Session
 
 from app.modules.academic_structure.models import AcademicProgramme, AcademicYear, Batch, Section
@@ -40,6 +40,10 @@ class ImportRepository:
         self.session.add_all(rows)
         self.session.flush()
         return rows
+
+    def delete_rows_for_batch(self, batch_id: UUID) -> None:
+        self.session.execute(delete(ImportRow).where(ImportRow.batch_id == batch_id))
+        self.session.flush()
 
     def get_rows(self, batch_id: UUID) -> Sequence[ImportRow]:
         stmt = select(ImportRow).where(ImportRow.batch_id == batch_id).order_by(ImportRow.row_number)
@@ -82,21 +86,25 @@ class ImportRepository:
     def resolve_batch(
         self, tenant_id: UUID, branch_id: UUID, academic_year_id: UUID, programme_id: UUID, name: str
     ) -> Batch | None:
+        normalized_name = name.strip()
         stmt = select(Batch).where(
             Batch.tenant_id == tenant_id,
             Batch.branch_id == branch_id,
             Batch.academic_year_id == academic_year_id,
             Batch.programme_id == programme_id,
-            (Batch.batch_name == name) | (Batch.batch_code == name)
+            (func.lower(Batch.batch_name) == normalized_name.lower())
+            | (func.lower(Batch.batch_code) == normalized_name.lower()),
         )
         return self.session.scalars(stmt).first()
 
     def resolve_section(self, tenant_id: UUID, branch_id: UUID, batch_id: UUID, name: str) -> Section | None:
+        normalized_name = name.strip()
         stmt = select(Section).where(
             Section.tenant_id == tenant_id,
             Section.branch_id == branch_id,
             Section.batch_id == batch_id,
-            (Section.section_name == name) | (Section.section_code == name)
+            (func.lower(Section.section_name) == normalized_name.lower())
+            | (func.lower(Section.section_code) == normalized_name.lower()),
         )
         return self.session.scalars(stmt).first()
 
@@ -128,17 +136,17 @@ class ImportRepository:
                     AND s.status = 'ACTIVE'
                     AND bt.status = 'ACTIVE'
                     AND (
-                        :batch_value IS NULL
-                        OR lower(bt.batch_name) = lower(:batch_value)
-                        OR lower(bt.batch_code) = lower(:batch_value)
+                        CAST(:batch_value AS text) IS NULL
+                        OR lower(bt.batch_name) = lower(CAST(:batch_value AS text))
+                        OR lower(bt.batch_code) = lower(CAST(:batch_value AS text))
                     )
                     AND (
-                        :year_level IS NULL
-                        OR bt.year_level = :year_level
+                        CAST(:year_level AS text) IS NULL
+                        OR bt.year_level = CAST(:year_level AS text)
                     )
                     AND (
-                        lower(s.section_name) = lower(:section_value)
-                        OR lower(s.section_code) = lower(:section_value)
+                        lower(s.section_name) = lower(CAST(:section_value AS text))
+                        OR lower(s.section_code) = lower(CAST(:section_value AS text))
                     )
                 ORDER BY s.section_name
                 LIMIT 1

@@ -68,6 +68,7 @@ class StudentImportValidator:
         return str(value).strip()
 
     def _parse_date(self, value: Any) -> str | None:
+        """Accept Excel date cells or day-first text, then normalize for database storage."""
         if value in (None, ""):
             return None
         if isinstance(value, datetime):
@@ -75,7 +76,7 @@ class StudentImportValidator:
         if isinstance(value, date):
             return value.isoformat()
         text = self._clean_string(value)
-        for date_format in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%m/%d/%Y"):
+        for date_format in ("%d/%m/%Y", "%d-%m-%Y", "%d/%m/%y", "%d-%m-%y"):
             try:
                 return datetime.strptime(text, date_format).date().isoformat()
             except ValueError:
@@ -161,17 +162,17 @@ class StudentImportValidator:
             # Date parsing
             dob_val = self._parse_date(dob)
             if dob_val is None:
-                errors.append({"field": "Date of Birth", "message": "Invalid date format."})
+                errors.append({"field": "Date of Birth", "message": "Invalid date format. Use DD/MM/YYYY or DD-MM-YYYY."})
                 status = "REJECTED"
 
             joining_val = self._parse_date(joining_date)
             if joining_val is None:
-                errors.append({"field": "Joining Date", "message": "Invalid date format."})
+                errors.append({"field": "Joining Date", "message": "Invalid date format. Use DD/MM/YYYY or DD-MM-YYYY."})
                 status = "REJECTED"
 
             ending_val = self._parse_date(ending_date)
             if ending_date not in (None, "") and ending_val is None:
-                errors.append({"field": "Ending Date", "message": "Invalid date format."})
+                errors.append({"field": "Ending Date", "message": "Invalid date format. Use DD/MM/YYYY or DD-MM-YYYY."})
                 status = "REJECTED"
 
             # Required fields check
@@ -245,23 +246,39 @@ class StudentImportValidator:
             if year_level_label and not year_level:
                 errors.append({"field": "Year Level", "message": "Must be First Year or Second Year."})
                 status = "REJECTED"
-            if section_str and academic_year_id and programme_id and row_branch_id:
-                placement = self.repository.resolve_section_placement(
+            if academic_year_id and programme_id and row_branch_id and batch_str:
+                batch = self.repository.resolve_batch(
                     self.tenant_id,
                     row_branch_id,
                     academic_year_id,
                     programme_id,
-                    section_str,
                     batch_str,
-                    year_level,
                 )
-                if not placement:
-                    errors.append({"field": "Section", "message": f"Not found: {section_str} for selected branch/year/programme/batch."})
+                if batch is None:
+                    errors.append({"field": "Batch", "message": f"Not found: {batch_str} for selected branch/year/programme."})
+                    status = "REJECTED"
+                elif year_level and str(batch.year_level) != year_level:
+                    expected_year_label = "First Year" if str(batch.year_level) == "1" else "Second Year"
+                    errors.append({"field": "Year Level", "message": f"Batch '{batch_str}' belongs to {expected_year_label}."})
                     status = "REJECTED"
                 else:
-                    batch_id = placement.batch_id
-                    section_id = placement.section_id
-                    year_level = year_level or placement.year_level
+                    batch_id = batch.id
+                    year_level = year_level or str(batch.year_level)
+                    if not section_str:
+                        errors.append({"field": "Section", "message": "Required field missing."})
+                        status = "REJECTED"
+                    else:
+                        section = self.repository.resolve_section(
+                            self.tenant_id,
+                            row_branch_id,
+                            batch.id,
+                            section_str,
+                        )
+                        if section is None:
+                            errors.append({"field": "Section", "message": f"Not found: {section_str} for selected batch."})
+                            status = "REJECTED"
+                        else:
+                            section_id = section.id
             elif not section_str:
                 errors.append({"field": "Section", "message": "Required field missing."})
                 status = "REJECTED"

@@ -52,6 +52,15 @@ class ImportRowCorrectionRequest(BaseModel):
     raw_data: dict[str, Any]
 
 
+class ImportRowBulkCorrection(BaseModel):
+    row_id: UUID
+    raw_data: dict[str, Any]
+
+
+class ImportRowsCorrectionRequest(BaseModel):
+    rows: list[ImportRowBulkCorrection] = Field(default_factory=list)
+
+
 class CommitResponse(BaseModel):
     message: str
     batch: ImportBatchResponse

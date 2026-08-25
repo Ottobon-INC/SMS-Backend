@@ -21,6 +21,7 @@ from app.modules.imports.schemas import (
     BulkActivateSectionRequest,
     BulkActivateSectionResponse,
     ImportRowCorrectionRequest,
+    ImportRowsCorrectionRequest,
     ManualAddStudentRequest,
     ManualAddStudentResponse,
     PreviewResponse,
@@ -176,6 +177,22 @@ def correct_batch_row(
         row_id=row_id,
         tenant_id=context.tenant_id,
         raw_data=payload.raw_data,
+        context_branch_id=context.branch_id,
+    )
+
+
+@router.patch("/batches/{batch_id}/rows", response_model=PreviewResponse)
+def correct_batch_rows(
+    batch_id: UUID,
+    payload: ImportRowsCorrectionRequest,
+    context: RequestContext = Depends(require_permission(IMPORT_UPLOAD)),
+    service: ImportService = Depends(get_import_service),
+):
+    assert context.tenant_id is not None
+    return service.correct_import_rows(
+        batch_id=batch_id,
+        tenant_id=context.tenant_id,
+        corrections=payload.rows,
         context_branch_id=context.branch_id,
     )
 
