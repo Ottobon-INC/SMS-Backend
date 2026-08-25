@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import and_, func, insert, select, update
+from sqlalchemy import and_, case, func, insert, literal, select, update
 from sqlalchemy.orm import Session
 
 from app.modules.academic_structure.models import AcademicProgramme, AcademicYear, Section
@@ -20,6 +20,63 @@ class FeeRepository:
 
     def __init__(self, session: Session) -> None:
         self.session = session
+
+    @staticmethod
+    def _programme_display(programme: Any) -> Any:
+        return case(
+            (
+                and_(
+                    programme.c.programme_code.is_not(None),
+                    programme.c.programme_name.is_not(None),
+                ),
+                func.concat(
+                    programme.c.programme_code,
+                    literal(" - "),
+                    programme.c.programme_name,
+                ),
+            ),
+            else_=func.coalesce(programme.c.programme_name, programme.c.programme_code),
+        )
+
+    @staticmethod
+    def _section_display(programme: Any, section: Any) -> Any:
+        return case(
+            (
+                and_(
+                    programme.c.programme_code.is_not(None),
+                    section.c.section_name.like(
+                        func.concat(programme.c.programme_code, literal("-1_"))
+                    ),
+                ),
+                func.concat(
+                    programme.c.programme_code,
+                    literal("-"),
+                    func.right(section.c.section_name, 1),
+                ),
+            ),
+            (
+                and_(
+                    programme.c.programme_code.is_not(None),
+                    section.c.section_name.like(
+                        func.concat(programme.c.programme_code, literal("-2_"))
+                    ),
+                ),
+                func.concat(
+                    programme.c.programme_code,
+                    literal("-"),
+                    func.right(section.c.section_name, 1),
+                ),
+            ),
+            else_=section.c.section_name,
+        )
+
+    @staticmethod
+    def _year_level_label(enrollment: Any) -> Any:
+        return case(
+            (enrollment.c.year_level == "1", literal("First Year")),
+            (enrollment.c.year_level == "2", literal("Second Year")),
+            else_=enrollment.c.year_level,
+        )
 
     def list_fee_accounts(self, *, tenant_id: UUID, branch_id: UUID | None) -> list[dict[str, Any]]:
         fee_account = FeeAccount.__table__
@@ -43,8 +100,13 @@ class FeeRepository:
                 student.c.legal_name,
                 branch.c.display_name.label("branch_name"),
                 academic_year.c.name.label("academic_year"),
+                enrollment.c.year_level,
+                self._year_level_label(enrollment).label("year_level_label"),
+                programme.c.programme_code,
                 programme.c.programme_name,
+                self._programme_display(programme).label("programme_display"),
                 section.c.section_name,
+                self._section_display(programme, section).label("section_display"),
                 fee_account.c.currency,
                 fee_account.c.assigned_fee_amount,
                 fee_account.c.scholarship_amount,
@@ -137,8 +199,13 @@ class FeeRepository:
                 student.c.legal_name,
                 branch.c.display_name.label("branch_name"),
                 academic_year.c.name.label("academic_year"),
+                enrollment.c.year_level,
+                self._year_level_label(enrollment).label("year_level_label"),
+                programme.c.programme_code,
                 programme.c.programme_name,
+                self._programme_display(programme).label("programme_display"),
                 section.c.section_name,
+                self._section_display(programme, section).label("section_display"),
             )
             .select_from(
                 enrollment.join(

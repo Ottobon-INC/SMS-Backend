@@ -28,8 +28,13 @@ class FeeAccountListItem(BaseModel):
     student_name: str
     branch_name: str | None
     academic_year: str | None
+    year_level: str | None = None
+    year_level_label: str | None = None
+    programme_code: str | None = None
     programme_name: str | None
+    programme_display: str | None = None
     section_name: str | None
+    section_display: str | None = None
     currency: str
     assigned_fee_amount: Decimal
     scholarship_amount: Decimal
@@ -54,8 +59,13 @@ class FeeEnrollmentOption(BaseModel):
     student_name: str
     branch_name: str
     academic_year: str
+    year_level: str | None = None
+    year_level_label: str | None = None
+    programme_code: str | None = None
     programme_name: str | None
+    programme_display: str | None = None
     section_name: str | None
+    section_display: str | None = None
 
 
 class FeeAccountCreateRequest(BaseModel):
