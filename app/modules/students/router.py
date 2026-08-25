@@ -126,7 +126,12 @@ def get_students(
             ay.name AS academic_year_name,
             p.id AS programme_id,
             p.programme_code,
-            p.programme_name AS stream,
+            p.programme_name,
+            CASE
+                WHEN p.programme_code IS NOT NULL AND p.programme_name IS NOT NULL
+                    THEN p.programme_code || ' - ' || p.programme_name
+                ELSE COALESCE(p.programme_name, p.programme_code)
+            END AS programme_display,
             p.stream_code,
             p.coaching_track,
             bt.id AS batch_id,
@@ -135,6 +140,20 @@ def get_students(
             sec.id AS section_id,
             sec.section_code,
             sec.section_name AS section,
+            CASE
+                WHEN p.programme_code IS NOT NULL
+                    AND sec.section_name LIKE p.programme_code || '-1_'
+                    THEN p.programme_code || '-' || RIGHT(sec.section_name, 1)
+                WHEN p.programme_code IS NOT NULL
+                    AND sec.section_name LIKE p.programme_code || '-2_'
+                    THEN p.programme_code || '-' || RIGHT(sec.section_name, 1)
+                ELSE sec.section_name
+            END AS section_display,
+            CASE
+                WHEN e.year_level = '1' THEN 'First Year'
+                WHEN e.year_level = '2' THEN 'Second Year'
+                ELSE e.year_level
+            END AS year_level_label,
             g.id AS guardian_id,
             g.full_name AS guardian_name,
             g.mobile AS guardian_phone,
@@ -228,18 +247,21 @@ def get_students(
             "academicYearName": r.academic_year_name,
             "programmeId": str(r.programme_id) if r.programme_id else None,
             "programmeCode": r.programme_code,
-            "programmeName": r.stream,
+            "programmeName": r.programme_name,
+            "programmeDisplay": r.programme_display,
             "streamCode": r.stream_code,
             "coachingTrack": r.coaching_track,
-            "stream": r.stream or "-",
+            "stream": r.programme_display or r.programme_name or r.programme_code or "-",
             "batchId": str(r.batch_id) if r.batch_id else None,
             "batchCode": r.batch_code,
             "batchName": r.batch_name,
             "sectionId": str(r.section_id) if r.section_id else None,
             "sectionCode": r.section_code,
             "sectionName": r.section,
-            "section": r.section or "-",
+            "sectionDisplay": r.section_display,
+            "section": r.section_display or r.section or "-",
             "yearLevel": r.year_level,
+            "yearLevelLabel": r.year_level_label,
             "enrollmentStatus": r.enrollment_status,
             "joiningDate": to_iso(r.joining_date),
             "endingDate": to_iso(r.ending_date),
