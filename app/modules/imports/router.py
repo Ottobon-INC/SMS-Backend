@@ -11,6 +11,11 @@ from sqlalchemy.orm import Session
 from app.core.database.session import get_db_session
 from app.core.security.context import RequestContext
 from app.core.security.dependencies import get_request_context, require_permission
+from app.modules.academic_structure.constants import (
+    STREAM_LABELS,
+    normalize_stream_code,
+    programme_display_label,
+)
 from app.modules.imports.permissions import IMPORT_COMMIT, IMPORT_UPLOAD, IMPORT_VIEW_PREVIEW
 from app.modules.imports.repository import ImportRepository
 from app.modules.imports.schemas import (
@@ -291,7 +296,28 @@ def get_programmes_lookup(
 ):
     assert context.tenant_id is not None
     programmes = service.repository.get_programmes(context.tenant_id)
-    return [{"id": p.id, "name": p.programme_name} for p in programmes]
+    return [
+        {
+            "id": p.id,
+            "name": programme_display_label(
+                programme_code=p.programme_code,
+                programme_name=p.programme_name,
+                stream_code=getattr(p, "stream_code", None),
+                coaching_track=getattr(p, "coaching_track", None),
+            ),
+            "code": p.programme_code,
+            "streamCode": getattr(p, "stream_code", None),
+            "coachingTrack": getattr(p, "coaching_track", None),
+            "displayLabel": programme_display_label(
+                programme_code=p.programme_code,
+                programme_name=p.programme_name,
+                stream_code=getattr(p, "stream_code", None),
+                coaching_track=getattr(p, "coaching_track", None),
+            ),
+            "baseStreamLabel": STREAM_LABELS.get(normalize_stream_code(getattr(p, "stream_code", None)), p.programme_name),
+        }
+        for p in programmes
+    ]
 
 
 @router.get("/lookups/batches", response_model=list[BatchLookup])

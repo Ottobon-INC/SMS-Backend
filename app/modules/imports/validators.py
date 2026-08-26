@@ -8,6 +8,7 @@ from uuid import UUID
 
 import openpyxl
 
+from app.modules.academic_structure.constants import normalize_programme_match_value
 from app.modules.imports.repository import ImportRepository
 
 
@@ -68,7 +69,7 @@ class StudentImportValidator:
         return str(value).strip()
 
     def _parse_date(self, value: Any) -> str | None:
-        """Accept Excel date cells or day-first text, then normalize for database storage."""
+        """Accept Excel date cells, ISO text, or day-first text, then normalize for database storage."""
         if value in (None, ""):
             return None
         if isinstance(value, datetime):
@@ -76,7 +77,9 @@ class StudentImportValidator:
         if isinstance(value, date):
             return value.isoformat()
         text = self._clean_string(value)
-        for date_format in ("%d/%m/%Y", "%d-%m-%Y", "%d/%m/%y", "%d-%m-%y"):
+        if "T" in text:
+            text = text.split("T", 1)[0]
+        for date_format in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%d/%m/%y", "%d-%m-%y"):
             try:
                 return datetime.strptime(text, date_format).date().isoformat()
             except ValueError:
@@ -346,9 +349,21 @@ class StudentImportValidator:
             else:
                 summary["rejected_rows"] += 1
 
+            student_date_headers = {"Date Of Birth", "Date of Birth", "Joining Date", "Ending Date"}
+            preview_raw_data = {}
+            for key, value in raw_data.items():
+                if value is None:
+                    preview_raw_data[key] = ""
+                elif key in student_date_headers:
+                    preview_raw_data[key] = self._parse_date(value) or self._clean_string(value)
+                elif hasattr(value, "isoformat"):
+                    preview_raw_data[key] = value.isoformat()
+                else:
+                    preview_raw_data[key] = str(value)
+
             results.append({
                 "row_number": row_idx,
-                "raw_data": {k: "" if v is None else (v.isoformat() if hasattr(v, "isoformat") else str(v)) for k, v in raw_data.items()},
+                "raw_data": preview_raw_data,
                 "normalized_data": normalized_data,
                 "validation_status": status,
                 "errors": errors,
@@ -419,7 +434,7 @@ class FeeImportValidator:
         return parsed.quantize(Decimal("0.01"))
 
     def _normalize_compare(self, value: Any) -> str:
-        return " ".join(self._clean_string(value).lower().split())
+        return normalize_programme_match_value(value)
 
     def _programme_matches(self, value: str, enrollment: dict[str, Any]) -> bool:
         normalized_value = self._normalize_compare(value)
@@ -429,6 +444,10 @@ class FeeImportValidator:
             enrollment.get("programme_code"),
             enrollment.get("programme_name"),
             enrollment.get("programme_display"),
+            enrollment.get("stream_code"),
+            f"{enrollment.get('stream_code')} {enrollment.get('coaching_track')}"
+            if enrollment.get("stream_code") and enrollment.get("coaching_track")
+            else None,
         ]
         normalized_candidates = {
             self._normalize_compare(candidate)

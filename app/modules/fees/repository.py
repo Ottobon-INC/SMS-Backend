@@ -26,8 +26,22 @@ class FeeRepository:
         return case(
             (
                 and_(
+                    programme.c.stream_code.is_not(None),
+                    programme.c.coaching_track.is_not(None),
+                ),
+                func.concat(
+                    programme.c.stream_code,
+                    literal(" - "),
+                    programme.c.coaching_track,
+                ),
+            ),
+            (
+                and_(
                     programme.c.programme_code.is_not(None),
                     programme.c.programme_name.is_not(None),
+                    programme.c.programme_name.not_like(
+                        func.concat(programme.c.programme_code, literal(" - %"))
+                    ),
                 ),
                 func.concat(
                     programme.c.programme_code,

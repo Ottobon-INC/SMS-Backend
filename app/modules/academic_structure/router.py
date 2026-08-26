@@ -14,15 +14,45 @@ from sqlalchemy.orm import Session
 
 from app.core.database.session import get_db_session
 
-from app.core.security.dependencies import resolve_tenant_id, resolve_user_id
+from app.core.security.context import RequestContext
+from app.core.security.dependencies import require_permission
+from app.modules.academic_structure.constants import (
+    DEFAULT_SUBJECTS_BY_STREAM,
+    ALLOWED_STREAM_TRACKS,
+    STREAM_LABELS,
+    normalize_stream_code,
+    normalize_track,
+    programme_code_for,
+    programme_display_label,
+    programme_response_from_row,
+    validate_stream_track,
+)
 
 router = APIRouter(prefix="/academic-structure", tags=["academic_structure"])
 
+ACADEMIC_STRUCTURE_VIEW = "academic_structure.view"
+ACADEMIC_STRUCTURE_MANAGE = "academic_structure.manage"
+
+
+def _require_tenant_context(context: RequestContext) -> UUID:
+    if context.tenant_id is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Tenant scope required.")
+    return context.tenant_id
+
+
+def _require_tenant_wide_context(context: RequestContext) -> UUID:
+    tenant_id = _require_tenant_wide_context(context)
+    if context.branch_id is not None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Tenant-wide academic governance scope required.")
+    return tenant_id
+
+
 @router.get("/academic-years")
 def get_academic_years(
-    tenant_id: UUID = Depends(resolve_tenant_id),
+    context: RequestContext = Depends(require_permission(ACADEMIC_STRUCTURE_VIEW)),
     db: Session = Depends(get_db_session),
 ):
+    tenant_id = _require_tenant_context(context)
     query = text("""
         SELECT id, code, name, starts_on, ends_on, status, is_default
         FROM sms_academic_years
@@ -47,10 +77,11 @@ def get_academic_years(
 @router.post("/academic-years")
 def create_academic_year(
     payload: dict,
-    tenant_id: UUID = Depends(resolve_tenant_id),
-    user_id: UUID = Depends(resolve_user_id),
+    context: RequestContext = Depends(require_permission(ACADEMIC_STRUCTURE_MANAGE)),
     db: Session = Depends(get_db_session),
 ):
+    tenant_id = _require_tenant_wide_context(context)
+    user_id = context.app_user_id
     tenant_id_str = str(tenant_id)
     user_id_str = str(user_id)
 
@@ -105,9 +136,10 @@ def create_academic_year(
 @router.patch("/academic-years/{ay_id}/default")
 def set_default_academic_year(
     ay_id: UUID,
-    tenant_id: UUID = Depends(resolve_tenant_id),
+    context: RequestContext = Depends(require_permission(ACADEMIC_STRUCTURE_MANAGE)),
     db: Session = Depends(get_db_session),
 ):
+    tenant_id = _require_tenant_wide_context(context)
     tenant_id_str = str(tenant_id)
     db.execute(
         text("UPDATE sms_academic_years SET is_default = false WHERE tenant_id = :tenant_id"),
@@ -124,9 +156,10 @@ def set_default_academic_year(
 
 @router.get("/subjects")
 def get_subjects(
-    tenant_id: UUID = Depends(resolve_tenant_id),
+    context: RequestContext = Depends(require_permission(ACADEMIC_STRUCTURE_VIEW)),
     db: Session = Depends(get_db_session),
 ):
+    tenant_id = _require_tenant_context(context)
     query = text("""
         SELECT
             id,
@@ -156,10 +189,11 @@ def get_subjects(
 @router.post("/subjects")
 def create_subject(
     payload: dict,
-    tenant_id: UUID = Depends(resolve_tenant_id),
-    user_id: UUID = Depends(resolve_user_id),
+    context: RequestContext = Depends(require_permission(ACADEMIC_STRUCTURE_MANAGE)),
     db: Session = Depends(get_db_session),
 ):
+    tenant_id = _require_tenant_wide_context(context)
+    user_id = context.app_user_id
     tenant_id_str = str(tenant_id)
     user_id_str = str(user_id)
 
@@ -214,14 +248,16 @@ def create_subject(
 
 @router.get("/programmes")
 def get_programmes(
-    tenant_id: UUID = Depends(resolve_tenant_id),
+    context: RequestContext = Depends(require_permission(ACADEMIC_STRUCTURE_VIEW)),
     db: Session = Depends(get_db_session),
 ):
+    tenant_id = _require_tenant_context(context)
     query = text("""
         SELECT
             id,
             programme_code AS code,
             programme_name AS name,
+            stream_code,
             coaching_track,
             COALESCE(metadata->>'yearLevel', 'First Year') AS year_level,
             COALESCE(metadata->'subjectIds', '[]'::jsonb) AS subject_ids
@@ -231,35 +267,79 @@ def get_programmes(
     """)
     rows = db.execute(query, {"tenant_id": tenant_id}).fetchall()
 
-    return [
-        {
-            "id": str(r.id),
-            "code": r.code,
-            "name": r.name,
-            "coachingTrack": r.coaching_track,
-            "yearLevel": r.year_level,
-            "subjectIds": r.subject_ids or [],
-        }
-        for r in rows
-    ]
+    return [programme_response_from_row(r) for r in rows]
+
+
+@router.get("/programme-options")
+def get_programme_options(
+    _: RequestContext = Depends(require_permission(ACADEMIC_STRUCTURE_VIEW)),
+):
+    return {
+        "streams": [
+            {
+                "code": code,
+                "label": label,
+                "defaultSubjects": list(DEFAULT_SUBJECTS_BY_STREAM.get(code, ())),
+                "allowedTracks": list(ALLOWED_STREAM_TRACKS[code]),
+            }
+            for code, label in STREAM_LABELS.items()
+        ],
+        "coachingTracks": sorted({track for tracks in ALLOWED_STREAM_TRACKS.values() for track in tracks}),
+    }
 
 @router.post("/programmes")
 def create_programme(
     payload: dict,
-    tenant_id: UUID = Depends(resolve_tenant_id),
-    user_id: UUID = Depends(resolve_user_id),
+    context: RequestContext = Depends(require_permission(ACADEMIC_STRUCTURE_MANAGE)),
     db: Session = Depends(get_db_session),
 ):
+    tenant_id = _require_tenant_wide_context(context)
+    user_id = context.app_user_id
     tenant_id_str = str(tenant_id)
     user_id_str = str(user_id)
 
     prog_id = payload.get("id") or str(uuid.uuid4())
-    code = payload.get("code") or "STREAM"
-    name = payload.get("name") or "Course Stream"
-    coaching_track = payload.get("coachingTrack")
-    year_level = payload.get("yearLevel") or "First Year"
+    stream_code = normalize_stream_code(payload.get("streamCode") or payload.get("stream_code") or payload.get("code"))
+    coaching_track = normalize_track(payload.get("coachingTrack") or payload.get("coaching_track"))
+    try:
+        validate_stream_track(stream_code, coaching_track)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    code = programme_code_for(stream_code, coaching_track)
+    name = programme_display_label(
+        programme_code=code,
+        programme_name=None,
+        stream_code=stream_code,
+        coaching_track=coaching_track,
+    )
     subject_ids = payload.get("subjectIds") or []
-    metadata_json = json.dumps({"yearLevel": year_level, "subjectIds": subject_ids})
+    metadata_json = json.dumps({"subjectIds": subject_ids})
+
+    duplicate = db.execute(
+        text("""
+            SELECT id
+            FROM sms_academic_programmes
+            WHERE tenant_id = :tenant_id
+                AND status = 'ACTIVE'
+                AND (
+                    upper(programme_code) = upper(:code)
+                    OR (upper(stream_code) = upper(:stream_code) AND lower(coaching_track) = lower(:coaching_track))
+                )
+            LIMIT 1
+        """),
+        {
+            "tenant_id": tenant_id_str,
+            "code": code,
+            "stream_code": stream_code,
+            "coaching_track": coaching_track,
+        },
+    ).fetchone()
+    if duplicate is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Course stream group {name} already exists.",
+        )
 
     query = text("""
         INSERT INTO sms_academic_programmes (
@@ -268,7 +348,7 @@ def create_programme(
             created_at, updated_at
         )
         VALUES (
-            :id, :tenant_id, :code, :name, :code,
+            :id, :tenant_id, :code, :name, :stream_code,
             :coaching_track, 2, 'ACTIVE',
             CAST(:metadata AS jsonb),
             :created_by, NOW(), NOW()
@@ -277,6 +357,7 @@ def create_programme(
             id,
             programme_code AS code,
             programme_name AS name,
+            stream_code,
             coaching_track,
             COALESCE(metadata->>'yearLevel', 'First Year') AS year_level,
             COALESCE(metadata->'subjectIds', '[]'::jsonb) AS subject_ids
@@ -288,22 +369,144 @@ def create_programme(
             "tenant_id": tenant_id_str,
             "code": code,
             "name": name,
+            "stream_code": stream_code,
             "coaching_track": coaching_track,
             "metadata": metadata_json,
             "created_by": user_id_str,
         },
     ).fetchone()
 
-
     db.commit()
-    return {
-        "id": str(res.id),
-        "code": res.code,
-        "name": res.name,
-        "coachingTrack": res.coaching_track,
-        "yearLevel": res.year_level,
-        "subjectIds": res.subject_ids or [],
-    }
+    return programme_response_from_row(res)
+
+
+@router.patch("/programmes/{programme_id}")
+def update_programme(
+    programme_id: UUID,
+    payload: dict,
+    context: RequestContext = Depends(require_permission(ACADEMIC_STRUCTURE_MANAGE)),
+    db: Session = Depends(get_db_session),
+):
+    tenant_id = _require_tenant_wide_context(context)
+    user_id = context.app_user_id
+    existing = db.execute(
+        text("""
+            SELECT
+                id,
+                programme_code,
+                programme_name,
+                stream_code,
+                coaching_track,
+                COALESCE(metadata->>'yearLevel', 'First Year') AS year_level,
+                COALESCE(metadata->'subjectIds', '[]'::jsonb) AS subject_ids,
+                status
+            FROM sms_academic_programmes
+            WHERE tenant_id = :tenant_id AND id = :programme_id
+            LIMIT 1
+        """),
+        {"tenant_id": tenant_id, "programme_id": programme_id},
+    ).fetchone()
+    if existing is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Course stream group not found.")
+
+    requested_stream = payload.get("streamCode") or payload.get("stream_code")
+    requested_track = payload.get("coachingTrack") or payload.get("coaching_track")
+    stream_code = normalize_stream_code(requested_stream) if requested_stream is not None else existing.stream_code
+    coaching_track = normalize_track(requested_track) if requested_track is not None else existing.coaching_track
+    identity_changed = stream_code != existing.stream_code or coaching_track != existing.coaching_track
+
+    if identity_changed:
+        dependent_count = db.execute(
+            text("""
+                SELECT
+                    (SELECT COUNT(*) FROM sms_batches WHERE tenant_id = :tenant_id AND programme_id = :programme_id)
+                    + (SELECT COUNT(*) FROM sms_enrollments WHERE tenant_id = :tenant_id AND programme_id = :programme_id)
+                    + (SELECT COUNT(*) FROM sms_exams WHERE tenant_id = :tenant_id AND (programme_id = :programme_id OR programme_ids ? CAST(:programme_id AS text)))
+                    + (
+                        SELECT COUNT(*)
+                        FROM sms_fee_accounts fa
+                        JOIN sms_enrollments e
+                            ON e.tenant_id = fa.tenant_id
+                            AND e.id = fa.enrollment_id
+                        WHERE fa.tenant_id = :tenant_id
+                            AND e.programme_id = :programme_id
+                    ) AS dependency_count
+            """),
+            {"tenant_id": tenant_id, "programme_id": programme_id},
+        ).scalar() or 0
+        if dependent_count > 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="This course stream group already has academic records. Create a new group instead of changing its stream or track.",
+            )
+        try:
+            validate_stream_track(stream_code, coaching_track)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    code = programme_code_for(stream_code, coaching_track)
+    name = programme_display_label(
+        programme_code=code,
+        programme_name=None,
+        stream_code=stream_code,
+        coaching_track=coaching_track,
+    )
+    subject_ids = payload.get("subjectIds", existing.subject_ids or [])
+    status_value = payload.get("status") or existing.status
+    if status_value not in {"ACTIVE", "INACTIVE"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid programme status.")
+
+    duplicate = db.execute(
+        text("""
+            SELECT id
+            FROM sms_academic_programmes
+            WHERE tenant_id = :tenant_id
+                AND id <> :programme_id
+                AND status = 'ACTIVE'
+                AND upper(programme_code) = upper(:code)
+            LIMIT 1
+        """),
+        {"tenant_id": tenant_id, "programme_id": programme_id, "code": code},
+    ).fetchone()
+    if duplicate is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Course stream group {name} already exists.")
+
+    metadata_json = json.dumps({"subjectIds": subject_ids})
+    row = db.execute(
+        text("""
+            UPDATE sms_academic_programmes
+            SET programme_code = :code,
+                programme_name = :name,
+                stream_code = :stream_code,
+                coaching_track = :coaching_track,
+                status = :status,
+                metadata = CAST(:metadata AS jsonb),
+                updated_by = :updated_by,
+                updated_at = NOW()
+            WHERE tenant_id = :tenant_id AND id = :programme_id
+            RETURNING
+                id,
+                programme_code AS code,
+                programme_name AS name,
+                stream_code,
+                coaching_track,
+                COALESCE(metadata->>'yearLevel', 'First Year') AS year_level,
+                COALESCE(metadata->'subjectIds', '[]'::jsonb) AS subject_ids
+        """),
+        {
+            "tenant_id": tenant_id,
+            "programme_id": programme_id,
+            "code": code,
+            "name": name,
+            "stream_code": stream_code,
+            "coaching_track": coaching_track,
+            "status": status_value,
+            "metadata": metadata_json,
+            "updated_by": user_id,
+        },
+    ).fetchone()
+    db.commit()
+    return programme_response_from_row(row)
 
 
 def _clean_section_suffix(value: str) -> str:
@@ -331,9 +534,12 @@ def get_academic_sections(
     branch_id: UUID,
     academic_year_id: UUID,
     programme_id: UUID,
-    tenant_id: UUID = Depends(resolve_tenant_id),
+    context: RequestContext = Depends(require_permission(ACADEMIC_STRUCTURE_VIEW)),
     db: Session = Depends(get_db_session),
 ):
+    tenant_id = _require_tenant_wide_context(context)
+    if context.branch_id is not None and context.branch_id != branch_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized for this branch.")
     rows = db.execute(
         text("""
             SELECT
@@ -397,10 +603,11 @@ def get_academic_sections(
 @router.post("/sections")
 def create_academic_section(
     payload: dict,
-    tenant_id: UUID = Depends(resolve_tenant_id),
-    user_id: UUID = Depends(resolve_user_id),
+    context: RequestContext = Depends(require_permission(ACADEMIC_STRUCTURE_MANAGE)),
     db: Session = Depends(get_db_session),
 ):
+    tenant_id = _require_tenant_wide_context(context)
+    user_id = context.app_user_id
     batch_id = payload.get("batchId") or payload.get("batch_id")
     section_suffix = _clean_section_suffix(payload.get("section") or payload.get("sectionName") or "")
     capacity = payload.get("capacity")
@@ -411,7 +618,8 @@ def create_academic_section(
                 bt.id,
                 bt.branch_id,
                 bt.year_level,
-                p.programme_code
+                p.programme_code,
+                p.stream_code
             FROM sms_batches bt
             JOIN sms_academic_programmes p
                 ON p.tenant_id = bt.tenant_id
@@ -426,8 +634,9 @@ def create_academic_section(
     if batch is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Active batch not found.")
 
+    section_display_prefix = batch.stream_code or batch.programme_code.split("-", 1)[0]
     section_code = f"{batch.programme_code}-{batch.year_level}{section_suffix}"
-    section_name = f"{batch.programme_code}-{section_suffix}"
+    section_name = f"{section_display_prefix}-{section_suffix}"
 
     existing = db.execute(
         text("""
@@ -439,8 +648,6 @@ def create_academic_section(
                 AND (
                     upper(section_code) = upper(:section_code)
                     OR upper(section_name) = upper(:section_name)
-                    OR upper(regexp_replace(section_code, '-[[:xdigit:]]{4}$', '')) = upper(:section_code)
-                    OR upper(regexp_replace(section_name, '-([12])([[:alnum:]]+)$', '-\\2')) = upper(:section_name)
                 )
                 AND status = 'ACTIVE'
         """),

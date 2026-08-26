@@ -100,7 +100,11 @@ class AcademicYearLookup(LookupItem):
     pass
 
 class ProgrammeLookup(LookupItem):
-    pass
+    code: str | None = None
+    streamCode: str | None = None
+    coachingTrack: str | None = None
+    displayLabel: str | None = None
+    baseStreamLabel: str | None = None
 
 class BatchLookup(LookupItem):
     pass

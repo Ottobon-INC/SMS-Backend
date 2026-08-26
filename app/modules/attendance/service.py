@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.modules.academic_structure.models import Batch, Section
+from app.modules.academic_structure.constants import programme_display_label
 from app.modules.attendance import repository, schemas
 from app.modules.attendance.models import AttendanceRecord, AttendanceSession
 from app.modules.audit.models import AuditEvent
@@ -387,7 +388,12 @@ def list_sessions(
             sectionId=str(session.section_id),
             sectionName=section.section_name,
             batchName=batch.batch_name,
-            programmeName=programme.programme_name,
+            programmeName=programme_display_label(
+                programme_code=programme.programme_code,
+                programme_name=programme.programme_name,
+                stream_code=getattr(programme, "stream_code", None),
+                coaching_track=getattr(programme, "coaching_track", None),
+            ),
             attendanceDate=session.attendance_date,
             status=session.status,
             openedBy=_get_user_name(db, session.opened_by) or str(session.opened_by),

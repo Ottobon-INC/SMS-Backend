@@ -121,7 +121,7 @@ def update_guardian_phone(
     payload: UpdateGuardianPhoneRequest,
     db: Session = Depends(get_db),
     context: RequestContext = Depends(require_tenant_scope),
-    _: RequestContext = Depends(require_any_permission({"notification.view"})),
+    _: RequestContext = Depends(require_any_permission({"guardian.update", "student.update_basic", "student.update_sensitive"})),
 ):
     """Save or update guardian mobile phone number for a student."""
     link = db.execute(

@@ -12,17 +12,60 @@ from sqlalchemy.orm import Session
 from app.core.database.session import get_db_session
 
 from uuid import UUID
-from app.core.security.dependencies import resolve_tenant_id, resolve_user_id
+from app.core.security.context import RequestContext
+from app.core.security.dependencies import require_any_permission, require_permission
+from app.modules.academic_structure.constants import programme_response_from_row
 
 router = APIRouter(prefix="/branches", tags=["branches"])
+
+BRANCH_VIEW = "branch.view"
+BRANCH_CREATE = "branch.create"
+BRANCH_UPDATE = "branch.update"
+ROLE_ASSIGN = "role.assign"
+ACADEMIC_STRUCTURE_MANAGE = "academic_structure.manage"
+
+
+def _require_tenant_context(context: RequestContext) -> UUID:
+    if context.tenant_id is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Tenant scope required.")
+    return context.tenant_id
+
+
+def _require_tenant_wide_context(context: RequestContext) -> UUID:
+    tenant_id = _require_tenant_context(context)
+    if context.branch_id is not None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Tenant-wide institution scope required.")
+    return tenant_id
+
+
+def _parse_branch_id(branch_id: str) -> UUID:
+    try:
+        return uuid.UUID(branch_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid branch_id UUID",
+        ) from exc
+
+
+def _ensure_branch_access(context: RequestContext, branch_id: UUID) -> None:
+    if context.branch_id is not None and context.branch_id != branch_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized for this branch.")
 
 
 @router.get("")
 @router.get("/")
 def get_branches(
-    tenant_id: UUID = Depends(resolve_tenant_id),
+    context: RequestContext = Depends(require_permission(BRANCH_VIEW)),
     db: Session = Depends(get_db_session),
 ):
+    tenant_id = _require_tenant_context(context)
+    params: dict[str, object] = {"tenant_id": str(tenant_id)}
+    branch_filter_sql = ""
+    if context.branch_id is not None:
+        branch_filter_sql = "AND id = :branch_id"
+        params["branch_id"] = context.branch_id
+
     query = text("""
         SELECT
             id,
@@ -35,9 +78,10 @@ def get_branches(
             timezone
         FROM sms_branches
         WHERE tenant_id = :tenant_id AND status != 'INACTIVE'
+            """ + branch_filter_sql + """
         ORDER BY created_at DESC
     """)
-    rows = db.execute(query, {"tenant_id": str(tenant_id)}).fetchall()
+    rows = db.execute(query, params).fetchall()
 
 
     if not rows:
@@ -111,16 +155,11 @@ def get_branches(
 @router.post("/")
 def create_branch(
     payload: dict,
-    tenant_id: UUID = Depends(resolve_tenant_id),
-    user_id: UUID = Depends(resolve_user_id),
+    context: RequestContext = Depends(require_permission(BRANCH_CREATE)),
     db: Session = Depends(get_db_session),
 ):
-    user_role = payload.get("user_role") or payload.get("role") or ""
-    if user_role == "BRANCH_ADMIN":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Branch creation is restricted to Institution Administrators (Deans). Principals cannot create campus branches.",
-        )
+    tenant_id = _require_tenant_wide_context(context)
+    user_id = context.app_user_id
     tenant_id_str = str(tenant_id)
     user_id_str = str(user_id)
     branch_id = payload.get("id") or str(uuid.uuid4())
@@ -189,9 +228,11 @@ def create_branch(
 def assign_principal(
     branch_id: str,
     payload: dict,
-    tenant_id: UUID = Depends(resolve_tenant_id),
+    context: RequestContext = Depends(require_any_permission({BRANCH_UPDATE, ROLE_ASSIGN})),
     db: Session = Depends(get_db_session),
 ):
+    tenant_id = _require_tenant_wide_context(context)
+    branch_id_uuid = _parse_branch_id(branch_id)
     tenant_id_str = str(tenant_id)
     user_id = payload.get("user_id") or payload.get("principal_user_id")
     user_name = payload.get("user_name") or payload.get("contact_person_name") or "Assigned Principal"
@@ -209,7 +250,7 @@ def assign_principal(
           )
           AND id != :branch_id
     """)
-    db.execute(clear_old_branches, {"tenant_id": tenant_id_str, "user_id": user_id, "branch_id": branch_id})
+    db.execute(clear_old_branches, {"tenant_id": tenant_id_str, "user_id": user_id, "branch_id": branch_id_uuid})
 
     deactivate_query = text("""
         UPDATE sms_user_access_assignments
@@ -235,8 +276,8 @@ def assign_principal(
             "id": assign_id,
             "tenant_id": tenant_id_str,
             "user_id": user_id,
-            "branch_id": branch_id,
-            "assigned_by": user_id,
+            "branch_id": branch_id_uuid,
+            "assigned_by": context.app_user_id,
         },
     )
 
@@ -250,7 +291,7 @@ def assign_principal(
         updated_at = NOW()
         WHERE id = :branch_id AND tenant_id = :tenant_id
     """)
-    db.execute(update_branch, {"branch_id": branch_id, "tenant_id": tenant_id_str, "user_name": user_name})
+    db.execute(update_branch, {"branch_id": branch_id_uuid, "tenant_id": tenant_id_str, "user_name": user_name})
     db.commit()
 
 
@@ -267,26 +308,29 @@ def assign_principal(
 @router.get("/{branch_id}/programmes")
 def get_branch_programmes(
     branch_id: str,
-    tenant_id: UUID = Depends(resolve_tenant_id),
+    context: RequestContext = Depends(require_permission(BRANCH_VIEW)),
     db: Session = Depends(get_db_session),
 ):
+    tenant_id = _require_tenant_context(context)
     params = {"tenant_id": str(tenant_id)}
 
     branch_filter_sql = ""
 
     if branch_id and branch_id != "ALL":
-        try:
-            branch_uuid = uuid.UUID(branch_id)
-            branch_filter_sql = "AND b.branch_id = :branch_uuid"
-            params["branch_uuid"] = branch_uuid
-        except ValueError:
-            pass
+        branch_uuid = _parse_branch_id(branch_id)
+        _ensure_branch_access(context, branch_uuid)
+        branch_filter_sql = "AND b.branch_id = :branch_uuid"
+        params["branch_uuid"] = branch_uuid
+    elif context.branch_id is not None:
+        branch_filter_sql = "AND b.branch_id = :branch_uuid"
+        params["branch_uuid"] = context.branch_id
 
     query = text(f"""
         SELECT DISTINCT
             p.id,
             p.programme_code AS code,
             p.programme_name AS name,
+            p.stream_code,
             p.coaching_track,
             COALESCE(p.metadata->>'yearLevel', 'First Year') AS year_level,
             COALESCE(p.metadata->'subjectIds', '[]'::jsonb) AS subject_ids
@@ -302,38 +346,22 @@ def get_branch_programmes(
     """)
     rows = db.execute(query, params).fetchall()
 
-    return [
-        {
-            "id": str(r.id),
-            "code": r.code,
-            "name": r.name,
-            "coachingTrack": r.coaching_track,
-            "yearLevel": r.year_level,
-            "subjectIds": r.subject_ids or [],
-        }
-        for r in rows
-    ]
+    return [programme_response_from_row(r) for r in rows]
 
 
 @router.post("/{branch_id}/programmes")
 def assign_branch_programmes(
     branch_id: str,
     payload: dict,
-    tenant_id: UUID = Depends(resolve_tenant_id),
-    user_id: UUID = Depends(resolve_user_id),
+    context: RequestContext = Depends(require_permission(ACADEMIC_STRUCTURE_MANAGE)),
     db: Session = Depends(get_db_session),
 ):
+    tenant_id = _require_tenant_wide_context(context)
+    user_id = context.app_user_id
     tenant_id_uuid = tenant_id
     user_id_uuid = user_id
 
-
-    try:
-        branch_id_uuid = uuid.UUID(branch_id)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid branch_id UUID",
-        ) from exc
+    branch_id_uuid = _parse_branch_id(branch_id)
 
     programme_ids = payload.get("programme_ids") or payload.get("programmeIds") or []
 
@@ -412,7 +440,11 @@ def assign_branch_programmes(
 
         for prog_id_uuid in selected_prog_uuids:
             prog_res = db.execute(
-                text("SELECT programme_code, programme_name FROM sms_academic_programmes WHERE id = :prog_id AND tenant_id = :tenant_id"),
+                text("""
+                    SELECT programme_code, programme_name, stream_code, coaching_track
+                    FROM sms_academic_programmes
+                    WHERE id = :prog_id AND tenant_id = :tenant_id
+                """),
                 {"prog_id": prog_id_uuid, "tenant_id": tenant_id_uuid},
             ).fetchone()
             if not prog_res:
@@ -420,10 +452,11 @@ def assign_branch_programmes(
 
             prog_code = prog_res.programme_code
             prog_name = prog_res.programme_name
+            section_display_prefix = prog_res.stream_code or prog_code.split("-", 1)[0]
 
             for yr_level, yr_name, yr_code in [("1", "First Year", "FY"), ("2", "Second Year", "SY")]:
                 batch_code = f"{prog_code}-{branch_hex}-{yr_code}"
-                batch_name = f"{prog_code} {yr_name}"
+                batch_name = f"{prog_name} {yr_name}"
 
                 existing_batch = db.execute(
                     text("""
@@ -484,22 +517,31 @@ def assign_branch_programmes(
 
                 # Ensure default section A exists for this batch
                 sec_code = f"{prog_code}-{yr_level}A"
-                sec_name = f"{prog_code}-A"
+                sec_name = f"{section_display_prefix}-A"
                 existing_section = db.execute(
                     text("""
-                        SELECT id FROM sms_sections
+                        SELECT id, status FROM sms_sections
                         WHERE tenant_id = :tenant_id AND branch_id = :branch_id
-                            AND (batch_id = :batch_id OR section_code = :sec_code)
+                            AND batch_id = :batch_id
+                            AND (upper(section_code) = upper(:sec_code) OR upper(section_name) = upper(:sec_name))
+                        LIMIT 1
                     """),
                     {
                         "tenant_id": tenant_id_uuid,
                         "branch_id": branch_id_uuid,
                         "batch_id": batch_id_uuid,
                         "sec_code": sec_code,
+                        "sec_name": sec_name,
                     },
                 ).fetchone()
 
-                if not existing_section:
+                if existing_section:
+                    if existing_section.status != "ACTIVE":
+                        db.execute(
+                            text("UPDATE sms_sections SET status = 'ACTIVE', updated_at = NOW() WHERE id = :id"),
+                            {"id": existing_section.id},
+                        )
+                else:
                     sec_id_uuid = uuid.uuid4()
                     db.execute(
                         text("""
@@ -540,16 +582,14 @@ def assign_branch_programmes(
 def get_branch_sections(
     branch_id: str,
     exam_id: str | None = None,
-    tenant_id: UUID = Depends(resolve_tenant_id),
+    context: RequestContext = Depends(require_permission(BRANCH_VIEW)),
     db: Session = Depends(get_db_session),
 ):
+    tenant_id = _require_tenant_context(context)
     tenant_id_uuid = tenant_id
 
-
-    try:
-        branch_id_uuid = uuid.UUID(branch_id)
-    except ValueError:
-        return []
+    branch_id_uuid = _parse_branch_id(branch_id)
+    _ensure_branch_access(context, branch_id_uuid)
 
     exam_id_uuid = None
     allowed_prog_ids: list[str] = []

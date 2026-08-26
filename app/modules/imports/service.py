@@ -370,6 +370,17 @@ class ImportService:
                     ay.name AS academic_year,
                     ap.programme_code,
                     ap.programme_name,
+                    ap.stream_code,
+                    ap.coaching_track,
+                    CASE
+                        WHEN ap.stream_code IS NOT NULL AND ap.coaching_track IS NOT NULL
+                            THEN ap.stream_code || ' - ' || ap.coaching_track
+                        WHEN ap.programme_code IS NOT NULL
+                            AND ap.programme_name IS NOT NULL
+                            AND ap.programme_name NOT ILIKE ap.programme_code || ' - %'
+                            THEN ap.programme_code || ' - ' || ap.programme_name
+                        ELSE COALESCE(ap.programme_name, ap.programme_code)
+                    END AS programme_display,
                     bt.year_level,
                     bt.batch_name,
                     s.section_name,
@@ -460,7 +471,9 @@ class ImportService:
                 ["Programme / Stream", "Programme Code", "Programme Name"],
                 [
                     (
-                        f"{programme.programme_code} - {programme.programme_name}",
+                        f"{programme.stream_code} - {programme.coaching_track}"
+                        if getattr(programme, "stream_code", None) and getattr(programme, "coaching_track", None)
+                        else f"{programme.programme_code} - {programme.programme_name}",
                         programme.programme_code,
                         programme.programme_name,
                     )
@@ -472,7 +485,7 @@ class ImportService:
                 (
                     row.branch_name,
                     row.academic_year,
-                    f"{row.programme_code} - {row.programme_name}",
+                    row.programme_display,
                     "First Year" if str(row.year_level) == "1" else "Second Year",
                     row.batch_name,
                     row.section_name,
@@ -539,8 +552,14 @@ class ImportService:
                     ay.name AS academic_year,
                     ap.programme_code,
                     ap.programme_name,
+                    ap.stream_code,
+                    ap.coaching_track,
                     CASE
-                        WHEN ap.programme_code IS NOT NULL AND ap.programme_name IS NOT NULL
+                        WHEN ap.stream_code IS NOT NULL AND ap.coaching_track IS NOT NULL
+                            THEN ap.stream_code || ' - ' || ap.coaching_track
+                        WHEN ap.programme_code IS NOT NULL
+                            AND ap.programme_name IS NOT NULL
+                            AND ap.programme_name NOT ILIKE ap.programme_code || ' - %'
                             THEN ap.programme_code || ' - ' || ap.programme_name
                         ELSE COALESCE(ap.programme_name, ap.programme_code)
                     END AS programme_display,

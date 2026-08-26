@@ -128,7 +128,11 @@ def get_students(
             p.programme_code,
             p.programme_name,
             CASE
-                WHEN p.programme_code IS NOT NULL AND p.programme_name IS NOT NULL
+                WHEN p.stream_code IS NOT NULL AND p.coaching_track IS NOT NULL
+                    THEN p.stream_code || ' - ' || p.coaching_track
+                WHEN p.programme_code IS NOT NULL
+                    AND p.programme_name IS NOT NULL
+                    AND p.programme_name NOT ILIKE p.programme_code || ' - %'
                     THEN p.programme_code || ' - ' || p.programme_name
                 ELSE COALESCE(p.programme_name, p.programme_code)
             END AS programme_display,

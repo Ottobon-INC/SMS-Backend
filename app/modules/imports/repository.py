@@ -8,6 +8,7 @@ from sqlalchemy import delete, func, select, text
 from sqlalchemy.orm import Session
 
 from app.modules.academic_structure.models import AcademicProgramme, AcademicYear, Batch, Section
+from app.modules.academic_structure.constants import normalize_programme_match_value, programme_display_label
 from app.modules.imports.models import ImportBatch, ImportRow
 from app.modules.students.models import Enrollment, Guardian, Student, StudentGuardianLink
 
@@ -65,23 +66,47 @@ class ImportRepository:
         return self.session.scalars(stmt).first()
 
     def resolve_programme(self, tenant_id: UUID, name: str) -> Any | None:
-        normalized_name = name.strip()
-        return self.session.execute(
+        normalized_name = normalize_programme_match_value(name)
+        rows = self.session.execute(
             text("""
-                SELECT *
+                SELECT
+                    *,
+                    CASE
+                        WHEN stream_code IS NOT NULL AND coaching_track IS NOT NULL
+                            THEN stream_code || ' - ' || coaching_track
+                        WHEN programme_code IS NOT NULL
+                            AND programme_name IS NOT NULL
+                            AND programme_name NOT ILIKE programme_code || ' - %'
+                            THEN programme_code || ' - ' || programme_name
+                        ELSE COALESCE(programme_name, programme_code)
+                    END AS display_label
                 FROM sms_academic_programmes
                 WHERE tenant_id = :tenant_id
                     AND status = 'ACTIVE'
-                    AND (
-                        lower(programme_name) = lower(:name)
-                        OR lower(programme_code) = lower(:name)
-                        OR lower(programme_code || ' - ' || programme_name) = lower(:name)
-                    )
                 ORDER BY programme_code
-                LIMIT 1
             """),
-            {"tenant_id": tenant_id, "name": normalized_name},
-        ).fetchone()
+            {"tenant_id": tenant_id},
+        ).fetchall()
+        for row in rows:
+            candidates = {
+                row.programme_code,
+                row.programme_name,
+                row.stream_code,
+                row.coaching_track,
+                row.display_label,
+                programme_display_label(
+                    programme_code=row.programme_code,
+                    programme_name=row.programme_name,
+                    stream_code=row.stream_code,
+                    coaching_track=row.coaching_track,
+                ),
+            }
+            if row.stream_code and row.coaching_track:
+                candidates.add(f"{row.stream_code} {row.coaching_track}")
+                candidates.add(f"{row.stream_code}-{row.coaching_track}")
+            if normalized_name in {normalize_programme_match_value(candidate) for candidate in candidates if candidate}:
+                return row
+        return None
 
     def resolve_batch(
         self, tenant_id: UUID, branch_id: UUID, academic_year_id: UUID, programme_id: UUID, name: str
@@ -285,8 +310,14 @@ class ImportRepository:
                     ay.name AS academic_year,
                     ap.programme_code,
                     ap.programme_name,
+                    ap.stream_code,
+                    ap.coaching_track,
                     CASE
-                        WHEN ap.programme_code IS NOT NULL AND ap.programme_name IS NOT NULL
+                        WHEN ap.stream_code IS NOT NULL AND ap.coaching_track IS NOT NULL
+                            THEN ap.stream_code || ' - ' || ap.coaching_track
+                        WHEN ap.programme_code IS NOT NULL
+                            AND ap.programme_name IS NOT NULL
+                            AND ap.programme_name NOT ILIKE ap.programme_code || ' - %'
                             THEN ap.programme_code || ' - ' || ap.programme_name
                         ELSE COALESCE(ap.programme_name, ap.programme_code)
                     END AS programme_display,

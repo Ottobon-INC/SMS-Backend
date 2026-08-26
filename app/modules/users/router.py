@@ -14,15 +14,34 @@ from sqlalchemy.orm import Session
 from app.core.database.session import get_db_session
 
 from uuid import UUID
-from app.core.security.dependencies import resolve_tenant_id, resolve_user_id
+from app.core.security.context import RequestContext
+from app.core.security.dependencies import require_permission
 
 router = APIRouter(prefix="/users", tags=["users"])
 
+USER_VIEW = "user.view"
+USER_CREATE = "user.create"
+
+
+def _require_tenant_context(context: RequestContext) -> UUID:
+    if context.tenant_id is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Tenant scope required.")
+    return context.tenant_id
 
 
 @router.get("")
 @router.get("/")
-def get_users(db: Session = Depends(get_db_session)):
+def get_users(
+    context: RequestContext = Depends(require_permission(USER_VIEW)),
+    db: Session = Depends(get_db_session),
+):
+    tenant_id = _require_tenant_context(context)
+    params: dict[str, object] = {"tenant_id": tenant_id}
+    branch_filter_sql = ""
+    if context.branch_id is not None:
+        branch_filter_sql = "AND a.branch_id = :branch_id"
+        params["branch_id"] = context.branch_id
+
     query = text("""
         SELECT DISTINCT ON (LOWER(u.email))
             u.id,
@@ -59,40 +78,12 @@ def get_users(db: Session = Depends(get_db_session)):
         LEFT JOIN sms_tenants t ON t.id = a.tenant_id
         LEFT JOIN sms_branches b ON b.tenant_id = a.tenant_id AND b.id = a.branch_id
         WHERE u.status = 'ACTIVE'
+            AND u.tenant_id = :tenant_id
+            """ + branch_filter_sql + """
         ORDER BY LOWER(u.email), u.created_at DESC
     """)
 
-    rows = db.execute(query).fetchall()
-    if not rows:
-        return [
-            {
-                "id": "usr-101",
-                "name": "Pramod Dean",
-                "email": "dean@svic.edu",
-                "mobile": "+91 98765 00001",
-                "role": "INSTITUTION_ADMIN",
-                "branch": "All Campuses",
-                "status": "ACTIVE",
-            },
-            {
-                "id": "usr-102",
-                "name": "Dr. K. V. Rao",
-                "email": "principal.hyd@svic.edu",
-                "mobile": "+91 98765 00002",
-                "role": "BRANCH_ADMIN",
-                "branch": "Hyderabad Main Campus",
-                "status": "ACTIVE",
-            },
-            {
-                "id": "usr-103",
-                "name": "Sita Lakshmi",
-                "email": "office.staff@svic.edu",
-                "mobile": "+91 98765 00003",
-                "role": "OFFICE_STAFF",
-                "branch": "Hyderabad Main Campus",
-                "status": "ACTIVE",
-            },
-        ]
+    rows = db.execute(query, params).fetchall()
     return [
         {
             "id": str(r.id),
@@ -111,11 +102,17 @@ def get_users(db: Session = Depends(get_db_session)):
 @router.post("/", status_code=status.HTTP_201_CREATED)
 def create_user(
     payload: dict,
-    tenant_id: UUID = Depends(resolve_tenant_id),
-    assigned_by: UUID = Depends(resolve_user_id),
+    context: RequestContext = Depends(require_permission(USER_CREATE)),
     db: Session = Depends(get_db_session),
 ):
+    tenant_id = _require_tenant_context(context)
+    assigned_by = context.app_user_id
     target_role = payload.get("role") or "OFFICE_STAFF"
+    if context.branch_id is not None and target_role != "OFFICE_STAFF":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Branch-scoped users can create only office staff accounts for their campus.",
+        )
     if target_role == "INSTITUTION_ADMIN":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -146,7 +143,7 @@ def create_user(
     ).fetchone()
 
     is_branch_scoped = target_role in ("BRANCH_ADMIN", "OFFICE_STAFF")
-    branch_id = payload.get("branch_id")
+    branch_id = str(context.branch_id) if context.branch_id is not None else payload.get("branch_id")
     if not branch_id and is_branch_scoped:
         first_branch = db.execute(text("SELECT id FROM sms_branches WHERE tenant_id = :tenant_id AND status = 'ACTIVE' LIMIT 1"), {"tenant_id": tenant_id_str}).scalar_one_or_none()
         branch_id = str(first_branch) if first_branch else None
