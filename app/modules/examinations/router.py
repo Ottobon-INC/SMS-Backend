@@ -55,6 +55,8 @@ def create_exam(
         return service.create_exam(tenant_id=context.tenant_id, user_id=context.app_user_id, payload=payload)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Failed to create assessment: {exc}") from exc
 
 
 @router.get("/{exam_id}", response_model=ExamRead)
@@ -132,25 +134,33 @@ def publish_exam(
 
 @router.get("/{exam_id}/subjects", response_model=list[ExamSubjectRead])
 def get_exam_subjects(
-    exam_id: UUID,
+    exam_id: str,
     context: RequestContext = Depends(require_tenant_scope),
     _: RequestContext = Depends(require_any_permission({'exam.view'})),
     service: ExaminationsService = Depends(get_exam_service),
 ) -> list[ExamSubjectRead]:
 
-    return service.get_exam_subjects(exam_id=exam_id, tenant_id=context.tenant_id)
+    try:
+        exam_uuid = UUID(exam_id)
+    except ValueError:
+        return []
+    return service.get_exam_subjects(exam_id=exam_uuid, tenant_id=context.tenant_id)
 
 
 @router.get("/{exam_id}/records", response_model=list[StudentExamRecordRead])
 def get_student_exam_records(
-    exam_id: UUID,
+    exam_id: str,
     section_id: UUID | None = Query(None),
     context: RequestContext = Depends(require_tenant_scope),
     _: RequestContext = Depends(require_any_permission({'exam.view'})),
     service: ExaminationsService = Depends(get_exam_service),
 ) -> list[StudentExamRecordRead]:
 
-    return service.get_student_exam_records(tenant_id=context.tenant_id, exam_id=exam_id, section_id=section_id)
+    try:
+        exam_uuid = UUID(exam_id)
+    except ValueError:
+        return []
+    return service.get_student_exam_records(tenant_id=context.tenant_id, exam_id=exam_uuid, section_id=section_id)
 
 
 @router.post("/{exam_id}/records/bulk", response_model=list[StudentExamRecordRead])

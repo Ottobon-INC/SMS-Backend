@@ -27,16 +27,96 @@ class ExaminationsRepository:
 
         if exam_subjects:
             for sub in exam_subjects:
+                raw_sub_id = sub.get("subject_id") or sub.get("subjectId")
+                sub_uuid = None
+                if isinstance(raw_sub_id, UUID):
+                    sub_uuid = raw_sub_id
+                elif raw_sub_id:
+                    try:
+                        sub_uuid = UUID(str(raw_sub_id))
+                    except (ValueError, TypeError):
+                        pass
+
+                if not sub_uuid:
+                    valid_sub = self.db.execute(
+                        text("SELECT id FROM sms_academic_subjects WHERE (tenant_id = :tid OR tenant_id IS NULL) AND (code ILIKE :code OR name ILIKE :code) LIMIT 1"),
+                        {"tid": exam.tenant_id, "code": sub.get("subject_code") or sub.get("subject_name") or "GEN"},
+                    ).fetchone()
+                    sub_uuid = valid_sub.id if valid_sub else uuid.uuid4()
+
                 es = ExamSubject(
                     tenant_id=exam.tenant_id,
                     exam_id=exam.id,
-                    subject_id=sub["subject_id"],
-                    subject_name=sub["subject_name"],
-                    subject_code=sub["subject_code"],
-                    maximum_marks=sub.get("maximum_marks", 100),
-                    pass_marks=sub.get("pass_marks", 35),
+                    subject_id=sub_uuid,
+                    subject_name=sub.get("subject_name") or sub.get("subjectName") or "Subject",
+                    subject_code=sub.get("subject_code") or sub.get("subjectCode") or "SUB",
+                    maximum_marks=sub.get("maximum_marks") or sub.get("maximumMarks") or 100,
+                    pass_marks=sub.get("pass_marks") or sub.get("passMarks") or 35,
                 )
                 self.db.add(es)
+
+        # Auto-provision student exam records for target enrolled students
+        try:
+            target_branch_ids = []
+            if getattr(exam, "branch_id", None):
+                target_branch_ids.append(exam.branch_id)
+            if getattr(exam, "branch_ids", None) and isinstance(exam.branch_ids, list):
+                target_branch_ids.extend([bid for bid in exam.branch_ids if isinstance(bid, UUID)])
+
+            target_prog_uuids = []
+            raw_pids = getattr(exam, "programme_ids", []) or []
+            if not raw_pids and getattr(exam, "programme_id", None):
+                raw_pids = [exam.programme_id]
+            for pid in raw_pids:
+                if pid:
+                    clean_p = str(pid).split("-second-year")[0].split("-first-year")[0]
+                    try:
+                        target_prog_uuids.append(UUID(clean_p))
+                    except ValueError:
+                        pass
+
+            has_branch_filter = len(target_branch_ids) > 0 and exam.scope != "ALL_BRANCHES"
+            has_prog_filter = len(target_prog_uuids) > 0
+
+            enrolled_rows = self.db.execute(
+                text("""
+                    SELECT e.id AS enrollment_id, e.student_id, e.section_id
+                    FROM sms_enrollments e
+                    JOIN sms_sections s ON s.id = e.section_id
+                    LEFT JOIN sms_batches b ON b.id = s.batch_id
+                    WHERE e.tenant_id = :tenant_id
+                      AND e.status = 'ACTIVE'
+                      AND s.status = 'ACTIVE'
+                      AND (:has_branch_filter = false OR s.branch_id = ANY(CAST(:branch_ids AS uuid[])))
+                      AND (
+                          :has_prog_filter = false OR
+                          b.id = ANY(CAST(:prog_ids AS uuid[])) OR
+                          b.programme_id = ANY(CAST(:prog_ids AS uuid[]))
+                      )
+                """),
+                {
+                    "tenant_id": exam.tenant_id,
+                    "has_branch_filter": has_branch_filter,
+                    "branch_ids": target_branch_ids if target_branch_ids else [uuid.uuid4()],
+                    "has_prog_filter": has_prog_filter,
+                    "prog_ids": target_prog_uuids if target_prog_uuids else [uuid.uuid4()],
+                },
+            ).fetchall()
+
+            for er in enrolled_rows:
+                ser = StudentExamRecord(
+                    tenant_id=exam.tenant_id,
+                    exam_id=exam.id,
+                    section_id=er.section_id,
+                    student_id=er.student_id,
+                    enrollment_id=er.enrollment_id,
+                    subject_marks={},
+                    status="DRAFT",
+                    entered_by=exam.created_by,
+                )
+                self.db.add(ser)
+        except Exception:
+            pass
 
         self.db.commit()
         self.db.refresh(exam)

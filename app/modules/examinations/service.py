@@ -36,6 +36,76 @@ class ExaminationsService:
         if payload.scope == "SINGLE_BRANCH" and not payload.branch_id:
             raise ValueError("branch_id is required for SINGLE_BRANCH scope assessments.")
 
+        # Clean programme_id and programme_ids to valid UUIDs
+        if exam_data.get("programme_id"):
+            clean_p = str(exam_data["programme_id"]).split("-second-year")[0].split("-first-year")[0]
+            try:
+                exam_data["programme_id"] = UUID(clean_p)
+            except (ValueError, TypeError):
+                exam_data["programme_id"] = None
+
+        if exam_data.get("programme_ids") and isinstance(exam_data["programme_ids"], list):
+            clean_pids = []
+            for pid in exam_data["programme_ids"]:
+                if pid:
+                    clean_p = str(pid).split("-second-year")[0].split("-first-year")[0]
+                    try:
+                        clean_pids.append(str(UUID(clean_p)))
+                    except (ValueError, TypeError):
+                        pass
+            exam_data["programme_ids"] = clean_pids
+
+        # FK Resolution 1: Resolve valid sms_academic_programmes.id for programme_id
+        prog_fk_valid = False
+        if exam_data.get("programme_id"):
+            # Check if it directly matches an academic programme
+            p_match = self.repo.db.execute(
+                text("SELECT id FROM sms_academic_programmes WHERE id = :pid LIMIT 1"),
+                {"pid": exam_data["programme_id"]},
+            ).fetchone()
+            if p_match:
+                prog_fk_valid = True
+            else:
+                # Check if it matches a batch_id and resolve to its programme_id
+                b_match = self.repo.db.execute(
+                    text("SELECT programme_id FROM sms_batches WHERE id = :bid LIMIT 1"),
+                    {"bid": exam_data["programme_id"]},
+                ).fetchone()
+                if b_match and b_match.programme_id:
+                    exam_data["programme_id"] = b_match.programme_id
+                    prog_fk_valid = True
+
+        if not prog_fk_valid:
+            valid_p = self.repo.db.execute(
+                text("SELECT id FROM sms_academic_programmes WHERE tenant_id = :tid AND status = 'ACTIVE' LIMIT 1"),
+                {"tid": tenant_id},
+            ).fetchone()
+            if valid_p:
+                exam_data["programme_id"] = valid_p.id
+
+        # FK Resolution 2: Resolve valid sms_academic_years.id for academic_year_id
+        ay_fk_valid = False
+        if exam_data.get("academic_year_id"):
+            try:
+                ay_uuid = UUID(str(exam_data["academic_year_id"]))
+                ay_match = self.repo.db.execute(
+                    text("SELECT id FROM sms_academic_years WHERE id = :ayid LIMIT 1"),
+                    {"ayid": ay_uuid},
+                ).fetchone()
+                if ay_match:
+                    exam_data["academic_year_id"] = ay_match.id
+                    ay_fk_valid = True
+            except (ValueError, TypeError):
+                pass
+
+        if not ay_fk_valid:
+            valid_ay = self.repo.db.execute(
+                text("SELECT id FROM sms_academic_years WHERE tenant_id = :tid ORDER BY is_current DESC, created_at DESC LIMIT 1"),
+                {"tid": tenant_id},
+            ).fetchone()
+            if valid_ay:
+                exam_data["academic_year_id"] = valid_ay.id
+
         exam_subjects = [es.model_dump() for es in payload.exam_subjects] if payload.exam_subjects else None
         return self.repo.create_exam(exam_data, exam_subjects)
 
@@ -60,9 +130,13 @@ class ExaminationsService:
 
                 target_prog_ids = []
                 if getattr(exam, "programme_ids", None) and isinstance(exam.programme_ids, list):
-                    target_prog_ids.extend([str(pid) for pid in exam.programme_ids if pid])
+                    for pid in exam.programme_ids:
+                        if pid:
+                            raw_p = str(pid).split("-second-year")[0].split("-first-year")[0]
+                            target_prog_ids.append(raw_p)
                 elif getattr(exam, "programme_id", None):
-                    target_prog_ids.append(str(exam.programme_id))
+                    raw_p = str(exam.programme_id).split("-second-year")[0].split("-first-year")[0]
+                    target_prog_ids.append(raw_p)
 
                 stream_codes = []
                 if target_prog_ids:

@@ -197,86 +197,179 @@ class WhatsAppNotificationService:
 
         return mark_details_str, total_str, pct_str, final_status
 
-    def send_exam_published_notifications(
-        self, exam_id: UUID, tenant_id: UUID, branch_id: UUID | None, background_tasks: BackgroundTasks
-    ) -> dict[str, Any]:
-        """Batch Queue: Dispatch exam result notifications to all enrolled students in published exam."""
-        exam_row = self.db.execute(text("SELECT name, exam_date FROM sms_exams WHERE id = :id"), {"id": exam_id}).first()
-        branch_row = self.db.execute(text("SELECT display_name FROM sms_branches WHERE id = :id"), {"id": branch_id}).first() if branch_id else None
+    def _process_and_dispatch_exam_published(
+        self, exam_id: UUID, tenant_id: UUID, branch_id: UUID | None
+    ) -> None:
+        """Background worker: Computes exam summaries in bulk and dispatches WhatsApp messages."""
+        try:
+            exam_row = self.db.execute(text("SELECT name, exam_date FROM sms_exams WHERE id = :id"), {"id": exam_id}).first()
+            branch_row = self.db.execute(text("SELECT display_name FROM sms_branches WHERE id = :id"), {"id": branch_id}).first() if branch_id else None
 
-        exam_name = exam_row.name if exam_row else "Term Assessment"
-        exam_date = str(exam_row.exam_date) if exam_row else "2026-08-15"
-        branch_name = branch_row.display_name if branch_row else "Main Campus"
+            exam_name = exam_row.name if exam_row else "Term Assessment"
+            exam_date = str(exam_row.exam_date) if exam_row else "2026-08-15"
+            branch_name = branch_row.display_name if branch_row else "Main Campus"
 
-        students_sql = """
-        SELECT ser.student_id,
-               COALESCE(s.display_name, s.legal_name) as student_name,
-               COALESCE(g.mobile, s.student_mobile) as guardian_phone
-        FROM sms_student_exam_records ser
-        JOIN sms_students s ON s.id = ser.student_id
-        LEFT JOIN sms_student_guardian_links sgl ON sgl.student_id = s.id AND sgl.is_primary = true
-        LEFT JOIN sms_guardians g ON g.id = sgl.guardian_id
-        WHERE ser.exam_id = :exam_id
-          AND ser.tenant_id = :tenant_id
-        """
-        rows = self.db.execute(text(students_sql), {"exam_id": exam_id, "tenant_id": tenant_id}).fetchall()
-        print(f"[NOTIF] >>> Total students with exam records found: {len(rows)}")
+            students_sql = """
+            SELECT ser.student_id,
+                   ser.subject_marks,
+                   COALESCE(s.display_name, s.legal_name) as student_name,
+                   COALESCE(g.mobile, s.student_mobile) as guardian_phone
+            FROM sms_student_exam_records ser
+            JOIN sms_students s ON s.id = ser.student_id
+            LEFT JOIN sms_student_guardian_links sgl ON sgl.student_id = s.id AND sgl.is_primary = true
+            LEFT JOIN sms_guardians g ON g.id = sgl.guardian_id
+            WHERE ser.exam_id = :exam_id
+              AND ser.tenant_id = :tenant_id
+            """
+            rows = self.db.execute(text(students_sql), {"exam_id": exam_id, "tenant_id": tenant_id}).fetchall()
+            if not rows:
+                return
 
-        items_to_dispatch = []
-        for r in rows:
-            student_id = r.student_id
-            student_name = r.student_name
-            phone = _normalise_phone(r.guardian_phone)
-            idempotency_key = f"EXAM_PUBLISHED:{exam_id}:{student_id}"
+            sub_rows = self.db.execute(
+                text("SELECT id, subject_id, subject_name, subject_code, maximum_marks, pass_marks FROM sms_exam_subjects WHERE exam_id = :exam_id"),
+                {"exam_id": exam_id},
+            ).fetchall()
 
-            if not phone:
-                self.repo.create_log(
+            sub_map = {}
+            for s in sub_rows:
+                info = {"name": s.subject_name, "max": s.maximum_marks, "pass": s.pass_marks}
+                sub_map[str(s.id)] = info
+                if s.subject_code:
+                    sub_map[s.subject_code.upper()] = info
+                    sub_map[s.subject_code] = info
+                if getattr(s, "subject_id", None):
+                    sub_map[str(s.subject_id)] = info
+
+            master_subs = self.db.execute(
+                text("SELECT id, subject_code, subject_name FROM sms_subjects WHERE tenant_id = :tenant_id"),
+                {"tenant_id": tenant_id},
+            ).fetchall()
+            for ms in master_subs:
+                if str(ms.id) not in sub_map:
+                    sub_map[str(ms.id)] = {"name": ms.subject_name, "max": 100, "pass": 35}
+                if ms.subject_code and ms.subject_code.upper() not in sub_map:
+                    sub_map[ms.subject_code.upper()] = {"name": ms.subject_name, "max": 100, "pass": 35}
+
+            items_to_dispatch = []
+            for r in rows:
+                student_id = r.student_id
+                student_name = r.student_name
+                phone = _normalise_phone(r.guardian_phone)
+                idempotency_key = f"EXAM_PUBLISHED:{exam_id}:{student_id}"
+
+                if not phone:
+                    self.repo.create_log(
+                        tenant_id=tenant_id,
+                        branch_id=branch_id,
+                        event_type="EXAM_PUBLISHED",
+                        entity_id=str(exam_id),
+                        student_id=student_id,
+                        recipient_phone=None,
+                        template_name=settings.template_exam_published,
+                        idempotency_key=idempotency_key,
+                        delivery_status="FAILED_MISSING_PHONE",
+                        error_message="Student guardian mobile phone number is missing in profile",
+                    )
+                    continue
+
+                subject_marks = r.subject_marks or {}
+                if isinstance(subject_marks, str):
+                    import json
+                    try:
+                        subject_marks = json.loads(subject_marks)
+                    except Exception:
+                        subject_marks = {}
+
+                score_details = []
+                total_obtained = 0.0
+                total_max = 0.0
+                absent_subs = []
+                failed_subs = []
+                attempted_count = 0
+
+                for sub_key, score_val in subject_marks.items():
+                    try:
+                        score = float(score_val)
+                    except (ValueError, TypeError):
+                        continue
+
+                    sub_info = sub_map.get(str(sub_key)) or sub_map.get(str(sub_key).upper())
+                    sub_name = sub_info["name"] if sub_info else str(sub_key).capitalize()
+                    max_m = float(sub_info["max"]) if (sub_info and sub_info.get("max")) else 100.0
+                    pass_m = float(sub_info["pass"]) if (sub_info and sub_info.get("pass")) else 35.0
+
+                    if score < 0:
+                        status_str = "ABSENT" if score == -1 else "EXEMPTED"
+                        score_details.append(f"  • {sub_name}: [{status_str}]")
+                        if score == -1:
+                            absent_subs.append(sub_name)
+                        continue
+
+                    attempted_count += 1
+                    is_pass = score >= pass_m
+                    if not is_pass:
+                        failed_subs.append(sub_name)
+
+                    total_obtained += score
+                    total_max += max_m
+                    score_details.append(f"  • {sub_name}: {score:g}/{max_m:g} -> {'PASSED' if is_pass else 'FAILED'}")
+
+                pct = (total_obtained / total_max * 100) if total_max > 0 else 0.0
+
+                if absent_subs:
+                    reasons = ", ".join(absent_subs[:2])
+                    final_status = f"FAILED (Absent in {len(absent_subs)} subjects)" if len(absent_subs) > 2 else f"FAILED (Absent in {reasons})"
+                elif failed_subs:
+                    reasons = ", ".join(failed_subs[:2])
+                    final_status = f"FAILED (Failed in {len(failed_subs)} subjects)" if len(failed_subs) > 2 else f"FAILED (Failed in {reasons})"
+                else:
+                    final_status = f"PASSED (Passed All {attempted_count} Subjects)" if attempted_count > 0 else "PASSED"
+
+                mark_details_str = "\n".join(score_details) if score_details else "  (No mark details entered)"
+                total_str = f"{total_obtained:g} / {total_max:g}"
+                pct_str = f"{pct:.1f}"
+
+                params = [
+                    student_name,
+                    exam_name,
+                    exam_date,
+                    mark_details_str,
+                    total_str,
+                    pct_str,
+                    final_status,
+                    branch_name,
+                ]
+
+                log = self.repo.create_log(
                     tenant_id=tenant_id,
                     branch_id=branch_id,
                     event_type="EXAM_PUBLISHED",
                     entity_id=str(exam_id),
                     student_id=student_id,
-                    recipient_phone=None,
+                    recipient_phone=phone,
                     template_name=settings.template_exam_published,
                     idempotency_key=idempotency_key,
-                    delivery_status="FAILED_MISSING_PHONE",
-                    error_message="Student guardian mobile phone number is missing in profile",
+                    delivery_status="QUEUED",
                 )
-                continue
+                items_to_dispatch.append({
+                    "log_id": log.id,
+                    "phone": phone,
+                    "template_name": settings.template_exam_published,
+                    "params": params,
+                })
 
-            mark_details, total_str, pct_str, final_status = self._calculate_student_exam_summary(tenant_id, exam_id, student_id)
+            if items_to_dispatch:
+                import asyncio
+                asyncio.run(self._dispatch_batch_chunked(items_to_dispatch))
+        except Exception as exc:
+            logger.error(f"Error in background exam publish notification runner: {exc}")
 
-            params = [
-                student_name,
-                exam_name,
-                exam_date,
-                mark_details,
-                total_str,
-                pct_str,
-                final_status,
-                branch_name,
-            ]
-
-            log = self.repo.create_log(
-                tenant_id=tenant_id,
-                branch_id=branch_id,
-                event_type="EXAM_PUBLISHED",
-                entity_id=str(exam_id),
-                student_id=student_id,
-                recipient_phone=phone,
-                template_name=settings.template_exam_published,
-                idempotency_key=idempotency_key,
-                delivery_status="QUEUED",
-            )
-            items_to_dispatch.append({
-                "log_id": log.id,
-                "phone": phone,
-                "template_name": settings.template_exam_published,
-                "params": params,
-            })
-
-        if items_to_dispatch:
-            background_tasks.add_task(self._dispatch_batch_chunked, items_to_dispatch)
+    def send_exam_published_notifications(
+        self, exam_id: UUID, tenant_id: UUID, branch_id: UUID | None, background_tasks: BackgroundTasks
+    ) -> dict[str, Any]:
+        """Batch Queue: Instantly offload exam result notifications processing to background task."""
+        background_tasks.add_task(self._process_and_dispatch_exam_published, exam_id, tenant_id, branch_id)
+        return {"status": "QUEUED", "message": "Exam result notifications queued for background dispatch"}
 
         return {"queued_count": len(items_to_dispatch), "total_students": len(rows)}
 

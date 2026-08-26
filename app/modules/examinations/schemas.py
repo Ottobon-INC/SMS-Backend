@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 # --- ExamSubject Schemas ---
 
 class ExamSubjectBase(BaseModel):
-    subject_id: UUID
+    subject_id: UUID | str
     subject_name: str
     subject_code: str
     maximum_marks: int = Field(gt=0, default=100)
@@ -36,12 +36,12 @@ class ExamBase(BaseModel):
     name: str = Field(min_length=1, max_length=150)
     type: str = Field(min_length=1, max_length=50)
     scope: str = Field(default="SINGLE_BRANCH")  # SINGLE_BRANCH, ALL_BRANCHES, SELECTED_BRANCHES
-    branch_id: UUID | None = None
+    branch_id: UUID | str | None = None
     branch_ids: list[str] | None = None
     excluded_branch_ids: list[str] | None = None
     exemption_reasons: dict[str, str] | None = None
-    academic_year_id: UUID
-    programme_id: UUID
+    academic_year_id: UUID | str
+    programme_id: UUID | str
     programme_ids: list[str] | None = None
     exam_date: date
     marks_entry_deadline: date | None = None
