@@ -16,6 +16,8 @@ from app.modules.users.router import router as users_router
 router = APIRouter(prefix="/api/v1")
 router.include_router(academic_structure_router)
 router.include_router(attendance_router)
+from app.modules.attendance.router import sections_router as attendance_sections_router
+router.include_router(attendance_sections_router)
 router.include_router(authentication_router)
 router.include_router(branches_router)
 router.include_router(dashboard_router)

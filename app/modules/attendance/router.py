@@ -15,6 +15,7 @@ from app.core.security.dependencies import (
 from app.modules.attendance import repository, schemas, service
 
 router = APIRouter(prefix="/attendance/sessions", tags=["attendance"])
+sections_router = APIRouter(prefix="/attendance/sections", tags=["attendance"])
 db_dependency = Depends(get_db_session)
 tenant_scope_dependency = Depends(require_tenant_scope)
 branch_scope_dependency = Depends(require_branch_scope)
@@ -168,7 +169,6 @@ def finalize_session(
 ) -> schemas.AttendanceSessionResponse:
     """Finalize a submitted attendance session."""
     assert context.tenant_id is not None
-    assert context.branch_id is not None
     return service.finalize_session(
         db=db,
         session_id=session_id,
@@ -176,4 +176,28 @@ def finalize_session(
         branch_id=context.branch_id,
         user_id=context.app_user_id,
         background_tasks=background_tasks,
+    )
+
+
+@sections_router.get("-status", response_model=list[schemas.SectionAttendanceStatusResponse])
+def get_sections_attendance_status(
+    date: str,
+    batchId: UUID,
+    db: Session = db_dependency,
+    context: RequestContext = branch_scope_dependency,
+    _: RequestContext = attendance_view_dependency,
+) -> list[schemas.SectionAttendanceStatusResponse]:
+    """Get the attendance status for all sections in a batch for a given date."""
+    assert context.tenant_id is not None
+    assert context.branch_id is not None
+    
+    from datetime import datetime
+    attendance_date = datetime.strptime(date, "%Y-%m-%d").date()
+    
+    return service.get_sections_attendance_status(
+        db=db,
+        tenant_id=context.tenant_id,
+        branch_id=context.branch_id,
+        batch_id=batchId,
+        attendance_date=attendance_date,
     )

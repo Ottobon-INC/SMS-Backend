@@ -26,6 +26,7 @@ class AttendanceSession(Base):
     tenant_id: Any
     branch_id: Any
     academic_year_id: Any
+    batch_id: Any
     section_id: Any
     attendance_date: Any
     status: Any
@@ -44,6 +45,7 @@ class AttendanceSession(Base):
         uuid_col("tenant_id", nullable=False),
         uuid_col("branch_id", nullable=False),
         uuid_col("academic_year_id", nullable=False),
+        uuid_col("batch_id", nullable=False),
         uuid_col("section_id", nullable=False),
         date_col("attendance_date", nullable=False),
         text_col("status", nullable=False, default="'DRAFT'"),
@@ -81,6 +83,12 @@ class AttendanceSession(Base):
             ["academic_year_id"],
             ["sms_academic_years.id"],
             name="fk_sms_attendance_sessions_academic_year",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["batch_id"],
+            ["sms_batches.id"],
+            name="fk_sms_attendance_sessions_batch",
             ondelete="RESTRICT",
         ),
         ForeignKeyConstraint(

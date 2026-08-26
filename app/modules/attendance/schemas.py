@@ -33,6 +33,7 @@ class AttendanceSessionResponse(BaseModel):
     tenantId: str
     branchId: str
     academicYearId: str
+    batchId: str
     sectionId: str
     attendanceDate: date
     status: Literal["DRAFT", "SUBMITTED", "FINALIZED"]
@@ -49,6 +50,7 @@ class AttendanceSessionListItem(BaseModel):
     tenantId: str
     branchId: str
     academicYearId: str
+    batchId: str
     sectionId: str
     sectionName: str
     batchName: str
@@ -63,3 +65,10 @@ class AttendanceSessionListItem(BaseModel):
 
 class ReturnAttendancePayload(BaseModel):
     reason: str | None = None
+
+class SectionAttendanceStatusResponse(BaseModel):
+    sectionId: str
+    sectionName: str
+    batchName: str
+    status: Literal["DRAFT", "SUBMITTED", "FINALIZED", "UNMARKED"]
+    sessionId: str | None = None

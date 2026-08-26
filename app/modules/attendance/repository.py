@@ -135,3 +135,33 @@ def get_sessions_list(
 
     stmt = stmt.order_by(AttendanceSession.attendance_date.desc(), Section.section_name)
     return list(db.execute(stmt).all())
+
+
+def get_sections_attendance_status(
+    db: Session,
+    tenant_id: UUID,
+    branch_id: UUID,
+    batch_id: UUID,
+    attendance_date: date,
+) -> Any:
+    """Fetch sections for a given batch with their attendance session status for a specific date."""
+    stmt = (
+        select(Section, Batch, AttendanceSession)
+        .join(Batch, Section.batch_id == Batch.id)
+        .outerjoin(
+            AttendanceSession,
+            and_(
+                AttendanceSession.section_id == Section.id,
+                AttendanceSession.attendance_date == attendance_date,
+            ),
+        )
+        .where(
+            and_(
+                Section.tenant_id == tenant_id,
+                Section.branch_id == branch_id,
+                Section.batch_id == batch_id,
+            )
+        )
+        .order_by(Section.section_name)
+    )
+    return list(db.execute(stmt).all())

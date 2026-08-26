@@ -99,6 +99,7 @@ def _build_session_response(
         tenantId=str(session.tenant_id),
         branchId=str(session.branch_id),
         academicYearId=str(session.academic_year_id),
+        batchId=str(session.batch_id),
         sectionId=str(session.section_id),
         attendanceDate=session.attendance_date,
         status=session.status,
@@ -149,6 +150,7 @@ def create_daily_session(
         tenant_id=tenant_id,
         branch_id=branch_id,
         academic_year_id=batch.academic_year_id,
+        batch_id=batch.id,
         section_id=section_id,
         attendance_date=payload.attendanceDate,
         status="DRAFT",
@@ -385,6 +387,7 @@ def list_sessions(
             tenantId=str(session.tenant_id),
             branchId=str(session.branch_id),
             academicYearId=str(session.academic_year_id),
+            batchId=str(session.batch_id),
             sectionId=str(session.section_id),
             sectionName=section.section_name,
             batchName=batch.batch_name,
@@ -404,3 +407,31 @@ def list_sessions(
         )
         for session, section, batch, programme in results
     ]
+
+
+def get_sections_attendance_status(
+    db: Session,
+    tenant_id: UUID,
+    branch_id: UUID,
+    batch_id: UUID,
+    attendance_date: date,
+) -> list[schemas.SectionAttendanceStatusResponse]:
+    """Get the attendance status for all sections in a batch for a given date."""
+    results = repository.get_sections_attendance_status(
+        db, tenant_id, branch_id, batch_id, attendance_date
+    )
+    
+    response = []
+    for section, batch, session in results:
+        status = session.status if session else "UNMARKED"
+        session_id = str(session.id) if session else None
+        response.append(
+            schemas.SectionAttendanceStatusResponse(
+                sectionId=str(section.id),
+                sectionName=section.section_name,
+                batchName=batch.batch_name,
+                status=status,
+                sessionId=session_id,
+            )
+        )
+    return response
