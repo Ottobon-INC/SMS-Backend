@@ -88,7 +88,7 @@ def get_dispatch_progress(
     entity_id: str,
     db: Session = Depends(get_db),
     context: RequestContext = Depends(require_tenant_scope),
-    _: RequestContext = Depends(require_any_permission({"notification.view"})),
+    _: RequestContext = Depends(require_any_permission({"notification.view", "exam.view", "exam.enter_marks"})),
 ):
     """Query completion percentage and ongoing state for an assessment or section."""
     repo = NotificationsRepository(db)

@@ -571,3 +571,245 @@ class WhatsAppNotificationService:
             background_tasks.add_task(self._dispatch_batch_chunked, items_to_dispatch)
 
         return {"queued_count": len(items_to_dispatch), "absent_count": len(absent_student_ids)}
+
+    def preview_fee_due_reminders(
+        self,
+        tenant_id: UUID,
+        due_date_cutoff: date | None = None,
+        branch_id: UUID | None = None,
+        force_resend: bool = False,
+    ) -> dict[str, Any]:
+        """Preview eligible fee due reminder dispatches, paid account exclusions, and same-day deduplications."""
+        branch_filter_sql = "AND fa.branch_id = :branch_id" if branch_id else ""
+        params: dict[str, Any] = {"tenant_id": tenant_id}
+        if branch_id:
+            params["branch_id"] = branch_id
+
+        # Query all active fee accounts for tenant/branch
+        query = text("""
+            SELECT fa.id, fa.student_id, fa.branch_id, fa.outstanding_amount, fa.net_payable_amount,
+                   fa.total_paid_amount, fa.payment_schedule, fa.status,
+                   COALESCE(s.display_name, s.legal_name) as student_name,
+                   s.legal_name, s.display_name,
+                   e.admission_number,
+                   ay.name as academic_year_name,
+                   b.display_name as branch_name,
+                   t.display_name as tenant_name,
+                   g.full_name as guardian_name,
+                   COALESCE(g.mobile, s.student_mobile) as guardian_phone
+            FROM sms_fee_accounts fa
+            JOIN sms_tenants t ON t.id = fa.tenant_id
+            JOIN sms_students s ON s.id = fa.student_id
+            JOIN sms_enrollments e ON e.id = fa.enrollment_id
+            JOIN sms_academic_years ay ON ay.id = fa.academic_year_id
+            JOIN sms_branches b ON b.id = fa.branch_id
+            LEFT JOIN sms_student_guardian_links sgl ON sgl.student_id = s.id AND sgl.is_primary = true
+            LEFT JOIN sms_guardians g ON g.id = sgl.guardian_id
+            WHERE fa.tenant_id = :tenant_id
+              AND fa.status IN ('ACTIVE', 'PARTIALLY_PAID', 'OVERDUE', 'PAID')
+              """ + branch_filter_sql + """
+        """)
+        rows = self.db.execute(query, params).fetchall()
+
+        total_accounts = len(rows)
+        paid_excluded = 0
+        reminded_today_excluded = 0
+        eligible_items = []
+        total_overdue_amount = 0.0
+
+        for r in rows:
+            out_amt = float(r.outstanding_amount or 0.0)
+            if out_amt <= 0 or r.status == "PAID":
+                paid_excluded += 1
+                continue
+
+            # Deduplication check: Has a FEE_DUE_REMINDER been dispatched to this student today?
+            if not force_resend:
+                dup_check = self.db.execute(
+                    text("""
+                        SELECT 1 FROM sms_notification_logs
+                        WHERE tenant_id = :tid
+                          AND student_id = :sid
+                          AND event_type = 'FEE_DUE_REMINDER'
+                          AND created_at >= CURRENT_DATE
+                        LIMIT 1
+                    """),
+                    {"tid": tenant_id, "sid": r.student_id},
+                ).fetchone()
+                if dup_check:
+                    reminded_today_excluded += 1
+                    continue
+
+            phone = _normalise_phone(r.guardian_phone)
+            student_name = r.student_name or "Student"
+            guardian_name = r.guardian_name or "Parent/Guardian"
+            tenant_name = r.tenant_name or "Educational Institution"
+            branch_name = r.branch_name or "Main Campus"
+            sender_signature = f"{tenant_name} ({branch_name})"
+            due_date_str = due_date_cutoff.strftime("%d-%b-%Y") if due_date_cutoff else "At earliest"
+            term_name = "Pending Fee Dues"
+            academic_year_name = r.academic_year_name or "2026-2027"
+
+            total_overdue_amount += out_amt
+
+            eligible_items.append({
+                "student_id": str(r.student_id),
+                "student_name": student_name,
+                "admission_number": r.admission_number,
+                "guardian_name": guardian_name,
+                "guardian_phone": phone,
+                "tenant_name": tenant_name,
+                "branch_name": branch_name,
+                "sender_signature": sender_signature,
+                "outstanding_amount": out_amt,
+                "academic_year_name": academic_year_name,
+                "term_name": term_name,
+                "due_date": due_date_str,
+            })
+
+        return {
+            "total_accounts": total_accounts,
+            "targeted_count": len(eligible_items),
+            "skipped_paid_count": paid_excluded,
+            "skipped_reminded_today_count": reminded_today_excluded,
+            "total_overdue_amount": round(total_overdue_amount, 2),
+            "eligible_students": eligible_items[:10], # Sample 10
+        }
+
+    def send_fee_due_reminders(
+        self,
+        tenant_id: UUID,
+        due_date_cutoff: date | None = None,
+        branch_id: UUID | None = None,
+        app_user_id: UUID | None = None,
+        background_tasks: BackgroundTasks | None = None,
+        force_resend: bool = False,
+    ) -> dict[str, Any]:
+        """Batch Queue: Dispatch personalized WhatsApp fee due reminders to parents."""
+        preview = self.preview_fee_due_reminders(
+            tenant_id=tenant_id,
+            due_date_cutoff=due_date_cutoff,
+            branch_id=branch_id,
+            force_resend=force_resend,
+        )
+
+        branch_filter_sql = "AND fa.branch_id = :branch_id" if branch_id else ""
+        params: dict[str, Any] = {"tenant_id": tenant_id}
+        if branch_id:
+            params["branch_id"] = branch_id
+
+        rows = self.db.execute(
+            text("""
+                SELECT fa.id, fa.student_id, fa.branch_id, fa.outstanding_amount, fa.status,
+                       COALESCE(s.display_name, s.legal_name) as student_name,
+                       e.admission_number,
+                       ay.name as academic_year_name,
+                       b.display_name as branch_name,
+                       t.display_name as tenant_name,
+                       g.full_name as guardian_name,
+                       COALESCE(g.mobile, s.student_mobile) as guardian_phone
+                FROM sms_fee_accounts fa
+                JOIN sms_tenants t ON t.id = fa.tenant_id
+                JOIN sms_students s ON s.id = fa.student_id
+                JOIN sms_enrollments e ON e.id = fa.enrollment_id
+                JOIN sms_academic_years ay ON ay.id = fa.academic_year_id
+                JOIN sms_branches b ON b.id = fa.branch_id
+                LEFT JOIN sms_student_guardian_links sgl ON sgl.student_id = s.id AND sgl.is_primary = true
+                LEFT JOIN sms_guardians g ON g.id = sgl.guardian_id
+                WHERE fa.tenant_id = :tenant_id
+                  AND fa.outstanding_amount > 0
+                  AND fa.status IN ('ACTIVE', 'PARTIALLY_PAID', 'OVERDUE')
+                  """ + branch_filter_sql + """
+            """),
+            params,
+        ).fetchall()
+
+        items_to_dispatch = []
+        today_str = datetime.now().strftime("%Y-%m-%d")
+
+        for r in rows:
+            out_amt = float(r.outstanding_amount or 0.0)
+            if out_amt <= 0:
+                continue
+
+            if not force_resend:
+                dup_check = self.db.execute(
+                    text("""
+                        SELECT 1 FROM sms_notification_logs
+                        WHERE tenant_id = :tid
+                          AND student_id = :sid
+                          AND event_type = 'FEE_DUE_REMINDER'
+                          AND created_at >= CURRENT_DATE
+                        LIMIT 1
+                    """),
+                    {"tid": tenant_id, "sid": r.student_id},
+                ).fetchone()
+                if dup_check:
+                    continue
+
+            phone = _normalise_phone(r.guardian_phone)
+            idempotency_key = f"FEE_DUE_REMINDER:{r.student_id}:{today_str}"
+
+            if not phone:
+                self.repo.create_log(
+                    tenant_id=tenant_id,
+                    branch_id=r.branch_id,
+                    event_type="FEE_DUE_REMINDER",
+                    entity_id=str(r.id),
+                    student_id=r.student_id,
+                    recipient_phone=None,
+                    app_user_id=app_user_id,
+                    template_name="fee_due_reminder_v1",
+                    idempotency_key=idempotency_key,
+                    delivery_status="FAILED_MISSING_PHONE",
+                    error_message="Student guardian phone number is missing in profile",
+                )
+                continue
+
+            student_name = r.student_name or "Student"
+            guardian_name = r.guardian_name or "Parent/Guardian"
+            tenant_name = r.tenant_name or "Educational Institution"
+            branch_name = r.branch_name or "Campus Office"
+            sender_signature = f"{tenant_name} ({branch_name})"
+            due_date_str = due_date_cutoff.strftime("%d-%b-%Y") if due_date_cutoff else "At earliest"
+            amount_str = f"{out_amt:,.2f}"
+            academic_year_name = r.academic_year_name or "2026-2027"
+
+            template_params = [
+                guardian_name,
+                student_name,
+                r.admission_number,
+                academic_year_name,
+                amount_str,
+                due_date_str,
+                sender_signature,
+            ]
+
+            log = self.repo.create_log(
+                tenant_id=tenant_id,
+                branch_id=r.branch_id,
+                event_type="FEE_DUE_REMINDER",
+                entity_id=str(r.id),
+                student_id=r.student_id,
+                recipient_phone=phone,
+                template_name="fee_due_reminder_v1",
+                idempotency_key=idempotency_key,
+                delivery_status="QUEUED",
+            )
+            items_to_dispatch.append({
+                "log_id": log.id,
+                "phone": phone,
+                "template_name": "fee_due_reminder_v1",
+                "params": template_params,
+            })
+
+        if items_to_dispatch and background_tasks is not None:
+            background_tasks.add_task(self._dispatch_batch_chunked, items_to_dispatch)
+
+        return {
+            "status": "QUEUED",
+            "queued_count": len(items_to_dispatch),
+            "total_accounts": preview["total_accounts"],
+            "skipped_paid_count": preview["skipped_paid_count"],
+            "skipped_reminded_today_count": preview["skipped_reminded_today_count"],
+        }

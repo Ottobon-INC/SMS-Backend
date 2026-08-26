@@ -55,7 +55,7 @@ def _ensure_branch_access(context: RequestContext, branch_id: UUID) -> None:
 @router.get("")
 @router.get("/")
 def get_branches(
-    context: RequestContext = Depends(require_permission(BRANCH_VIEW)),
+    context: RequestContext = Depends(require_any_permission({"branch.view", "exam.view", "exam.enter_marks", "academic_structure.view", "student.view"})),
     db: Session = Depends(get_db_session),
 ):
     tenant_id = _require_tenant_context(context)
@@ -308,7 +308,7 @@ def assign_principal(
 @router.get("/{branch_id}/programmes")
 def get_branch_programmes(
     branch_id: str,
-    context: RequestContext = Depends(require_permission(BRANCH_VIEW)),
+    context: RequestContext = Depends(require_any_permission({"branch.view", "exam.view", "exam.enter_marks", "academic_structure.view", "student.view"})),
     academic_year_id: str | None = None,
     db: Session = Depends(get_db_session),
 ):
@@ -316,14 +316,13 @@ def get_branch_programmes(
     params: dict[str, object] = {"tenant_id": str(tenant_id)}
 
     branch_filter_sql = ""
-    if branch_id and branch_id != "ALL":
-        branch_uuid = _parse_branch_id(branch_id)
-        _ensure_branch_access(context, branch_uuid)
-        branch_filter_sql = "AND b.branch_id = :branch_uuid"
-        params["branch_uuid"] = branch_uuid
-    elif context.branch_id is not None:
+    if context.branch_id is not None:
         branch_filter_sql = "AND b.branch_id = :branch_uuid"
         params["branch_uuid"] = context.branch_id
+    elif branch_id and branch_id != "ALL":
+        branch_uuid = _parse_branch_id(branch_id)
+        branch_filter_sql = "AND b.branch_id = :branch_uuid"
+        params["branch_uuid"] = branch_uuid
 
     ay_filter_sql = ""
     if academic_year_id:
@@ -656,7 +655,7 @@ def assign_branch_programmes(
 def get_branch_sections(
     branch_id: str,
     exam_id: str | None = None,
-    context: RequestContext = Depends(require_permission(BRANCH_VIEW)),
+    context: RequestContext = Depends(require_any_permission({"branch.view", "exam.view", "exam.enter_marks", "academic_structure.view", "student.view"})),
     db: Session = Depends(get_db_session),
 ):
     tenant_id = _require_tenant_context(context)
