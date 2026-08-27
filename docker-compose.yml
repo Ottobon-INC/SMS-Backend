@@ -3,27 +3,68 @@ name: student-management-backend
 services:
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
 
   api:
-    build: .
-    env_file: .env.example
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - path: .env.example
+      - path: .env
+        required: false
+    environment:
+      REDIS_URL: redis://redis:6379/0
     ports:
-      - "8000:8000"
+      - "${BACKEND_HOST_PORT:-8920}:8000"
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
 
   celery-worker:
-    build: .
-    env_file: .env.example
-    command: celery -A celery_app.celery_app worker --loglevel=INFO
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - path: .env.example
+      - path: .env
+        required: false
+    environment:
+      REDIS_URL: redis://redis:6379/0
+    command: ["celery", "-A", "celery_app.celery_app", "worker", "--loglevel=INFO"]
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_started
 
   celery-beat:
-    build: .
-    env_file: .env.example
-    command: celery -A celery_app.celery_app beat --loglevel=INFO
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - path: .env.example
+      - path: .env
+        required: false
+    environment:
+      REDIS_URL: redis://redis:6379/0
+    command: ["celery", "-A", "celery_app.celery_app", "beat", "--loglevel=INFO"]
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_started
+
+volumes:
+  redis-data:
