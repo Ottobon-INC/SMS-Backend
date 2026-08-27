@@ -1,7 +1,7 @@
 """WhatsApp Notification Service: Template Formatting, Driver Routing, and Async Chunking."""
 
 import asyncio
-from datetime import datetime
+from datetime import date, datetime
 import logging
 from typing import Any
 from uuid import UUID
