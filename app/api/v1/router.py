@@ -13,6 +13,8 @@ from app.modules.notifications.router import router as notifications_router
 from app.modules.students.router import router as students_router
 from app.modules.users.router import router as users_router
 
+from app.modules.whatsapp_simulator.router import router as whatsapp_simulator_router
+
 router = APIRouter(prefix="/api/v1")
 router.include_router(academic_structure_router)
 router.include_router(attendance_router)
@@ -28,6 +30,7 @@ router.include_router(users_router)
 router.include_router(imports_router)
 router.include_router(fee_imports_router)
 router.include_router(notifications_router)
+router.include_router(whatsapp_simulator_router)
 
 
 @router.get("/")

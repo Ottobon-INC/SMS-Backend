@@ -169,6 +169,7 @@ class NotificationsRepository:
             l.provider_message_id,
             l.delivery_status,
             l.error_message,
+            l.payload_data,
             l.sent_at,
             l.delivered_at,
             l.read_at,
@@ -190,4 +191,28 @@ class NotificationsRepository:
             "branch_id": branch_id,
             "limit": limit,
         }).mappings().all()
-        return [dict(r) for r in rows]
+
+        from app.modules.whatsapp_simulator.service import render_meta_template
+        results = []
+        for r in rows:
+            row_dict = dict(r)
+            payload = row_dict.get("payload_data")
+            params = []
+            if isinstance(payload, dict):
+                params = payload.get("params") or []
+            elif isinstance(payload, str):
+                import json
+                try:
+                    parsed = json.loads(payload)
+                    params = parsed.get("params") or []
+                except Exception:
+                    params = []
+
+            if params and isinstance(params, list):
+                rendered = render_meta_template(row_dict.get("template_name", ""), [str(p) for p in params])
+                row_dict["message_body"] = rendered.get("body", "")
+            else:
+                row_dict["message_body"] = None
+            results.append(row_dict)
+
+        return results
