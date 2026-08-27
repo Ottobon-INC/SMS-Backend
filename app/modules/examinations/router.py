@@ -36,7 +36,7 @@ def list_exams(
     branch_id: UUID | None = Query(None),
     status: str | None = Query(None),
     context: RequestContext = Depends(require_tenant_scope),
-    _: RequestContext = Depends(require_any_permission({'exam.view'})),
+    _: RequestContext = Depends(require_any_permission({'exam.view', 'exam.enter_marks', 'exam.marks_enter', 'exam.manage'})),
     service: ExaminationsService = Depends(get_exam_service),
 ) -> list[ExamRead]:
     target_branch_id = context.branch_id if context.branch_id else branch_id
@@ -136,7 +136,7 @@ def publish_exam(
 def get_exam_subjects(
     exam_id: str,
     context: RequestContext = Depends(require_tenant_scope),
-    _: RequestContext = Depends(require_any_permission({'exam.view'})),
+    _: RequestContext = Depends(require_any_permission({'exam.view', 'exam.enter_marks', 'exam.marks_enter', 'exam.manage'})),
     service: ExaminationsService = Depends(get_exam_service),
 ) -> list[ExamSubjectRead]:
 
@@ -152,7 +152,7 @@ def get_student_exam_records(
     exam_id: str,
     section_id: UUID | None = Query(None),
     context: RequestContext = Depends(require_tenant_scope),
-    _: RequestContext = Depends(require_any_permission({'exam.view'})),
+    _: RequestContext = Depends(require_any_permission({'exam.view', 'exam.enter_marks', 'exam.marks_enter', 'exam.manage'})),
     service: ExaminationsService = Depends(get_exam_service),
 ) -> list[StudentExamRecordRead]:
 
@@ -169,7 +169,7 @@ def bulk_save_student_exam_records(
     payload: StudentExamRecordBulkSaveRequest,
     background_tasks: BackgroundTasks,
     context: RequestContext = Depends(require_tenant_scope),
-    _: RequestContext = Depends(require_any_permission({'exam.marks_enter'})),
+    _: RequestContext = Depends(require_any_permission({'exam.marks_enter', 'exam.enter_marks', 'exam.manage'})),
     service: ExaminationsService = Depends(get_exam_service),
 ) -> list[StudentExamRecordRead]:
 
