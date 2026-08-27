@@ -59,15 +59,17 @@ class WhatsAppNotificationService:
         """Dispatch HTTP POST payload to local Simulator or Meta Cloud API."""
         mode = settings.whatsapp_mode.upper()
         if mode == "SIMULATOR":
-            target_url = settings.simulator_url
-            headers = {"Content-Type": "application/json"}
-        else:
-            phone_id = settings.meta_phone_number_id
-            target_url = f"https://graph.facebook.com/v20.0/{phone_id}/messages"
-            headers = {
-                "Authorization": f"Bearer {settings.meta_access_token}",
-                "Content-Type": "application/json",
-            }
+            from app.modules.whatsapp_simulator.service import simulator_manager
+            msg = simulator_manager.add_message(payload)
+            return {"messages": [{"id": msg["id"]}]}
+
+        phone_id = settings.meta_phone_number_id
+        base_url = settings.meta_cloud_api_url.rstrip("/")
+        target_url = f"{base_url}/{phone_id}/messages"
+        headers = {
+            "Authorization": f"Bearer {settings.meta_access_token}",
+            "Content-Type": "application/json",
+        }
 
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(target_url, json=payload, headers=headers)
@@ -198,7 +200,7 @@ class WhatsAppNotificationService:
         return mark_details_str, total_str, pct_str, final_status
 
     def _process_and_dispatch_exam_published(
-        self, exam_id: UUID, tenant_id: UUID, branch_id: UUID | None
+        self, exam_id: UUID, tenant_id: UUID, branch_id: UUID | None, prev_published_at: datetime | None = None
     ) -> None:
         """Background worker: Computes exam summaries in bulk and dispatches WhatsApp messages."""
         try:
@@ -209,19 +211,36 @@ class WhatsAppNotificationService:
             exam_date = str(exam_row.exam_date) if exam_row else "2026-08-15"
             branch_name = branch_row.display_name if branch_row else "Main Campus"
 
-            students_sql = """
-            SELECT ser.student_id,
-                   ser.subject_marks,
-                   COALESCE(s.display_name, s.legal_name) as student_name,
-                   COALESCE(g.mobile, s.student_mobile) as guardian_phone
-            FROM sms_student_exam_records ser
-            JOIN sms_students s ON s.id = ser.student_id
-            LEFT JOIN sms_student_guardian_links sgl ON sgl.student_id = s.id AND sgl.is_primary = true
-            LEFT JOIN sms_guardians g ON g.id = sgl.guardian_id
-            WHERE ser.exam_id = :exam_id
-              AND ser.tenant_id = :tenant_id
-            """
-            rows = self.db.execute(text(students_sql), {"exam_id": exam_id, "tenant_id": tenant_id}).fetchall()
+            if prev_published_at is not None:
+                students_sql = """
+                SELECT ser.student_id,
+                       ser.subject_marks,
+                       COALESCE(s.display_name, s.legal_name) as student_name,
+                       COALESCE(g.mobile, s.student_mobile) as guardian_phone
+                FROM sms_student_exam_records ser
+                JOIN sms_students s ON s.id = ser.student_id
+                LEFT JOIN sms_student_guardian_links sgl ON sgl.student_id = s.id AND sgl.is_primary = true
+                LEFT JOIN sms_guardians g ON g.id = sgl.guardian_id
+                WHERE ser.exam_id = :exam_id
+                  AND ser.tenant_id = :tenant_id
+                  AND ser.updated_at > :prev_published_at
+                """
+                rows = self.db.execute(text(students_sql), {"exam_id": exam_id, "tenant_id": tenant_id, "prev_published_at": prev_published_at}).fetchall()
+            else:
+                students_sql = """
+                SELECT ser.student_id,
+                       ser.subject_marks,
+                       COALESCE(s.display_name, s.legal_name) as student_name,
+                       COALESCE(g.mobile, s.student_mobile) as guardian_phone
+                FROM sms_student_exam_records ser
+                JOIN sms_students s ON s.id = ser.student_id
+                LEFT JOIN sms_student_guardian_links sgl ON sgl.student_id = s.id AND sgl.is_primary = true
+                LEFT JOIN sms_guardians g ON g.id = sgl.guardian_id
+                WHERE ser.exam_id = :exam_id
+                  AND ser.tenant_id = :tenant_id
+                """
+                rows = self.db.execute(text(students_sql), {"exam_id": exam_id, "tenant_id": tenant_id}).fetchall()
+
             if not rows:
                 return
 
@@ -255,7 +274,11 @@ class WhatsAppNotificationService:
                 student_id = r.student_id
                 student_name = r.student_name
                 phone = _normalise_phone(r.guardian_phone)
-                idempotency_key = f"EXAM_PUBLISHED:{exam_id}:{student_id}"
+                if prev_published_at is not None:
+                    import time
+                    idempotency_key = f"EXAM_CORRECTED:{exam_id}:{student_id}:{int(time.time())}"
+                else:
+                    idempotency_key = f"EXAM_PUBLISHED:{exam_id}:{student_id}"
 
                 if not phone:
                     self.repo.create_log(
@@ -350,6 +373,7 @@ class WhatsAppNotificationService:
                     template_name=settings.template_exam_published,
                     idempotency_key=idempotency_key,
                     delivery_status="QUEUED",
+                    payload_data={"params": params},
                 )
                 items_to_dispatch.append({
                     "log_id": log.id,
@@ -365,10 +389,10 @@ class WhatsAppNotificationService:
             logger.error(f"Error in background exam publish notification runner: {exc}")
 
     def send_exam_published_notifications(
-        self, exam_id: UUID, tenant_id: UUID, branch_id: UUID | None, background_tasks: BackgroundTasks
+        self, exam_id: UUID, tenant_id: UUID, branch_id: UUID | None, background_tasks: BackgroundTasks, prev_published_at: datetime | None = None
     ) -> dict[str, Any]:
         """Batch Queue: Instantly offload exam result notifications processing to background task."""
-        background_tasks.add_task(self._process_and_dispatch_exam_published, exam_id, tenant_id, branch_id)
+        background_tasks.add_task(self._process_and_dispatch_exam_published, exam_id, tenant_id, branch_id, prev_published_at)
         return {"status": "QUEUED", "message": "Exam result notifications queued for background dispatch"}
 
         return {"queued_count": len(items_to_dispatch), "total_students": len(rows)}
@@ -427,6 +451,7 @@ class WhatsAppNotificationService:
             template_name=settings.template_mark_correction,
             idempotency_key=idempotency_key,
             delivery_status="QUEUED",
+            payload_data={"params": params},
         )
 
         background_tasks.add_task(
@@ -500,6 +525,7 @@ class WhatsAppNotificationService:
             template_name=settings.template_fee_receipt,
             idempotency_key=idempotency_key,
             delivery_status="QUEUED",
+            payload_data={"params": params},
         )
 
         background_tasks.add_task(
@@ -795,6 +821,7 @@ class WhatsAppNotificationService:
                 template_name="fee_due_reminder_v1",
                 idempotency_key=idempotency_key,
                 delivery_status="QUEUED",
+                payload_data={"params": template_params},
             )
             items_to_dispatch.append({
                 "log_id": log.id,

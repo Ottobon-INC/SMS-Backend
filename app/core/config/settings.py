@@ -49,7 +49,8 @@ class Settings(BaseSettings):
 
     # WhatsApp Notifications Configuration
     whatsapp_mode: str = "SIMULATOR"  # SIMULATOR or META
-    simulator_url: str = "http://localhost:3001/api/meta_outbound"
+    simulator_url: str = ""
+    meta_cloud_api_url: str = ""
     meta_phone_number_id: str = ""
     meta_access_token: str = ""
     whatsapp_verify_token: str = ""

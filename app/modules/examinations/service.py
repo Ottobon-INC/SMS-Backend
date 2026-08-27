@@ -362,30 +362,59 @@ class ExaminationsService:
                 f"Cannot publish assessment: The following active class section(s) have unsubmitted student marks: {sec_list}. All active student sections must complete mark entries and submit to Principal before publishing."
             )
 
-        # Generate & Log WhatsApp Parent Notification Dispatches for all enrolled students
-        dispatch_rows = self.repo.db.execute(
-            text("""
-                SELECT
-                    st.id AS student_id,
-                    COALESCE(st.display_name, st.legal_name) AS student_name,
-                    st.student_number,
-                    sec.section_name,
-                    ex.name AS exam_name,
-                    ex.exam_date,
-                    g.full_name AS guardian_name,
-                    COALESCE(g.mobile, st.student_mobile, '+91 98765 43210') AS guardian_mobile,
-                    r.subject_marks
-                FROM sms_student_exam_records r
-                JOIN sms_students st ON st.id = r.student_id
-                LEFT JOIN sms_sections sec ON sec.id = r.section_id
-                JOIN sms_exams ex ON ex.id = r.exam_id
-                LEFT JOIN sms_student_guardian_links sgl ON sgl.student_id = st.id AND sgl.is_primary = true
-                LEFT JOIN sms_guardians g ON g.id = sgl.guardian_id
-                WHERE r.tenant_id = :tenant_id AND r.exam_id = :exam_id
-                ORDER BY sec.section_name, st.legal_name
-            """),
-            {"tenant_id": tenant_id, "exam_id": exam_id},
-        ).fetchall()
+        prev_published_at = getattr(exam, "published_at", None)
+
+        # Generate & Log WhatsApp Parent Notification Dispatches (Delta update if republished)
+        if prev_published_at is not None:
+            dispatch_rows = self.repo.db.execute(
+                text("""
+                    SELECT
+                        st.id AS student_id,
+                        COALESCE(st.display_name, st.legal_name) AS student_name,
+                        st.student_number,
+                        sec.section_name,
+                        ex.name AS exam_name,
+                        ex.exam_date,
+                        g.full_name AS guardian_name,
+                        COALESCE(g.mobile, st.student_mobile, '+91 98765 43210') AS guardian_mobile,
+                        r.subject_marks
+                    FROM sms_student_exam_records r
+                    JOIN sms_students st ON st.id = r.student_id
+                    LEFT JOIN sms_sections sec ON sec.id = r.section_id
+                    JOIN sms_exams ex ON ex.id = r.exam_id
+                    LEFT JOIN sms_student_guardian_links sgl ON sgl.student_id = st.id AND sgl.is_primary = true
+                    LEFT JOIN sms_guardians g ON g.id = sgl.guardian_id
+                    WHERE r.tenant_id = :tenant_id
+                      AND r.exam_id = :exam_id
+                      AND r.updated_at > :prev_published_at
+                    ORDER BY sec.section_name, st.legal_name
+                """),
+                {"tenant_id": tenant_id, "exam_id": exam_id, "prev_published_at": prev_published_at},
+            ).fetchall()
+        else:
+            dispatch_rows = self.repo.db.execute(
+                text("""
+                    SELECT
+                        st.id AS student_id,
+                        COALESCE(st.display_name, st.legal_name) AS student_name,
+                        st.student_number,
+                        sec.section_name,
+                        ex.name AS exam_name,
+                        ex.exam_date,
+                        g.full_name AS guardian_name,
+                        COALESCE(g.mobile, st.student_mobile, '+91 98765 43210') AS guardian_mobile,
+                        r.subject_marks
+                    FROM sms_student_exam_records r
+                    JOIN sms_students st ON st.id = r.student_id
+                    LEFT JOIN sms_sections sec ON sec.id = r.section_id
+                    JOIN sms_exams ex ON ex.id = r.exam_id
+                    LEFT JOIN sms_student_guardian_links sgl ON sgl.student_id = st.id AND sgl.is_primary = true
+                    LEFT JOIN sms_guardians g ON g.id = sgl.guardian_id
+                    WHERE r.tenant_id = :tenant_id AND r.exam_id = :exam_id
+                    ORDER BY sec.section_name, st.legal_name
+                """),
+                {"tenant_id": tenant_id, "exam_id": exam_id},
+            ).fetchall()
 
         sub_rows = self.repo.db.execute(
             text("""
@@ -503,6 +532,7 @@ FINAL STATUS     : {final_status}
                     tenant_id=tenant_id,
                     branch_id=exam.branch_id,
                     background_tasks=background_tasks,
+                    prev_published_at=prev_published_at,
                 )
                 print(f"[PUBLISH] >>> Notification trigger result: {result}")
             except Exception as notif_err:
@@ -536,7 +566,16 @@ FINAL STATUS     : {final_status}
         exam = self.repo.get_exam_by_id(exam_id, tenant_id)
         is_published = (exam and getattr(exam, "status", None) == "PUBLISHED")
 
+        existing_recs = self.repo.get_student_exam_records(tenant_id, exam_id=exam_id)
+        existing_map = {str(r.student_id): r for r in existing_recs}
+
         for rec in records:
+            st_id_clean = str(rec.student_id).replace("stu-", "").replace("ser-", "").replace("enr-", "")
+            existing_rec = existing_map.get(st_id_clean) or existing_map.get(str(rec.student_id))
+            old_marks = (existing_rec.subject_marks if existing_rec else {}) or {}
+            new_marks = rec.subject_marks or {}
+            marks_changed = (old_marks != new_marks)
+
             r = self.repo.upsert_student_exam_record(
                 tenant_id=tenant_id,
                 exam_id=exam_id,
@@ -549,7 +588,8 @@ FINAL STATUS     : {final_status}
             )
             saved_records.append(r)
 
-            if is_published and rec.student_id and background_tasks is not None:
+            # ONLY IF the assessment was ALREADY PUBLISHED and marks actually CHANGED:
+            if is_published and marks_changed and rec.student_id and background_tasks is not None:
                 branch_id = getattr(exam, "branch_id", None)
                 self.notif_service.send_single_student_correction_notification(
                     exam_id=exam_id,

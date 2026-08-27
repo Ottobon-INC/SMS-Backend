@@ -330,10 +330,15 @@ class ExaminationsRepository:
 
         now = datetime.now()
         if existing:
+            old_marks = existing.subject_marks or {}
+            new_marks = subject_marks or {}
+            marks_changed = (old_marks != new_marks)
+
             existing.subject_marks = subject_marks
             existing.status = calc_status
             existing.entered_by = entered_by
-            existing.updated_at = now
+            if marks_changed:
+                existing.updated_at = now
             record = existing
         else:
             record = StudentExamRecord(

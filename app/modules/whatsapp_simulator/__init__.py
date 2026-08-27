@@ -1,0 +1,1 @@
+"""WhatsApp Simulator isolated module."""
