@@ -190,10 +190,10 @@ def get_sections_attendance_status(
     """Get the attendance status for all sections in a batch for a given date."""
     assert context.tenant_id is not None
     assert context.branch_id is not None
-    
+
     from datetime import datetime
     attendance_date = datetime.strptime(date, "%Y-%m-%d").date()
-    
+
     return service.get_sections_attendance_status(
         db=db,
         tenant_id=context.tenant_id,

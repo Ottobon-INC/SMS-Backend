@@ -420,7 +420,7 @@ def get_sections_attendance_status(
     results = repository.get_sections_attendance_status(
         db, tenant_id, branch_id, batch_id, attendance_date
     )
-    
+
     response = []
     for section, batch, session in results:
         status = session.status if session else "UNMARKED"
