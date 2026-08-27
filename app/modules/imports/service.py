@@ -362,7 +362,7 @@ class ImportService:
             {"tenant_id": tenant_id, "branch_id": str(context_branch_id) if context_branch_id else None},
         ).fetchall()
         academic_years = self.repository.get_academic_years(tenant_id)
-        programmes = self.repository.get_programmes(tenant_id)
+        programmes = self.repository.get_programmes(tenant_id, context_branch_id)
         sections = self.session.execute(
             text("""
                 SELECT

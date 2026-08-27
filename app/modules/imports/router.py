@@ -3,7 +3,7 @@
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -291,11 +291,20 @@ def get_academic_years_lookup(
 
 @router.get("/lookups/programmes", response_model=list[ProgrammeLookup])
 def get_programmes_lookup(
+    branch_id: UUID | None = None,
+    academic_year_id: UUID | None = None,
     context: RequestContext = Depends(get_request_context),
     service: ImportService = Depends(get_import_service)
 ):
     assert context.tenant_id is not None
-    programmes = service.repository.get_programmes(context.tenant_id)
+
+    target_branch_id = branch_id
+    if context.branch_id is not None:
+        if target_branch_id is not None and context.branch_id != target_branch_id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized for this branch.")
+        target_branch_id = context.branch_id
+
+    programmes = service.repository.get_programmes(context.tenant_id, target_branch_id, academic_year_id)
     return [
         {
             "id": p.id,

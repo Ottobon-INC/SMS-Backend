@@ -258,11 +258,29 @@ class ImportRepository:
         ).order_by(AcademicYear.starts_on.desc())
         return self.session.scalars(stmt).all()
 
-    def get_programmes(self, tenant_id: UUID) -> Sequence[AcademicProgramme]:
+    def get_programmes(
+        self,
+        tenant_id: UUID,
+        branch_id: UUID | None = None,
+        academic_year_id: UUID | None = None,
+    ) -> Sequence[AcademicProgramme]:
         stmt = select(AcademicProgramme).where(
             AcademicProgramme.tenant_id == tenant_id,
             AcademicProgramme.status == 'ACTIVE'
-        ).order_by(AcademicProgramme.programme_name)
+        )
+        if branch_id:
+            stmt = stmt.join(
+                Batch,
+                (Batch.tenant_id == AcademicProgramme.tenant_id)
+                & (Batch.programme_id == AcademicProgramme.id),
+            ).where(
+                Batch.branch_id == branch_id,
+                Batch.status == 'ACTIVE',
+            )
+            if academic_year_id:
+                stmt = stmt.where(Batch.academic_year_id == academic_year_id)
+            stmt = stmt.distinct()
+        stmt = stmt.order_by(AcademicProgramme.programme_name)
         return self.session.scalars(stmt).all()
 
     def get_batches(self, tenant_id: UUID, branch_id: UUID, academic_year_id: UUID | None = None, programme_id: UUID | None = None) -> Sequence[Batch]:
