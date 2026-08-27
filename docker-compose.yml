@@ -1,6 +1,18 @@
 name: student-management-backend
 
 services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
   api:
     build:
       context: .
@@ -10,5 +22,49 @@ services:
       - path: .env.example
       - path: .env
         required: false
+    environment:
+      REDIS_URL: redis://redis:6379/0
     ports:
       - "${BACKEND_HOST_PORT:-8920}:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  celery-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - path: .env.example
+      - path: .env
+        required: false
+    environment:
+      REDIS_URL: redis://redis:6379/0
+    command: ["celery", "-A", "celery_app.celery_app", "worker", "--loglevel=INFO"]
+    depends_on:
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_started
+
+  celery-beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - path: .env.example
+      - path: .env
+        required: false
+    environment:
+      REDIS_URL: redis://redis:6379/0
+    command: ["celery", "-A", "celery_app.celery_app", "beat", "--loglevel=INFO"]
+    depends_on:
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_started
+
+volumes:
+  redis-data:
