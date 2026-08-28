@@ -1,6 +1,7 @@
 """Import foundation SQLAlchemy models."""
 
 # mypy: ignore-errors
+
 from typing import Any
 
 from sqlalchemy import CheckConstraint, ForeignKeyConstraint, Index, Table, UniqueConstraint, text
@@ -20,6 +21,7 @@ from app.shared.models.foundation_columns import (
 
 class ImportBatch(Base):
     """sms_import_batches table mapping."""
+
     __allow_unmapped__ = True
 
     id: Any
@@ -55,15 +57,54 @@ class ImportBatch(Base):
         timestamp("approved_at"),
         timestamp("committed_at"),
         jsonb("metadata"),
-        UniqueConstraint("tenant_id", "idempotency_key", name="uq_sms_import_batches_tenant_idempotency"),
-        CheckConstraint("status IN ('UPLOADED', 'VALIDATING', 'PREVIEW', 'SUBMITTED', 'COMMITTED', 'REJECTED', 'FAILED')", name="ck_sms_import_batches_status"),
-        CheckConstraint("NOT (is_high_risk AND status = 'COMMITTED') OR (approved_by IS NOT NULL AND approved_at IS NOT NULL)", name="ck_sms_import_batches_high_risk_approval"),
-        ForeignKeyConstraint(["tenant_id"], ["sms_tenants.id"], name="fk_sms_import_batches_tenant", ondelete="RESTRICT"),
-        ForeignKeyConstraint(["tenant_id", "branch_id"], ["sms_branches.tenant_id", "sms_branches.id"], name="fk_sms_import_batches_branch_tenant", ondelete="RESTRICT"),
-        ForeignKeyConstraint(["created_by"], ["sms_users.id"], name="fk_sms_import_batches_created_by", ondelete="RESTRICT"),
-        ForeignKeyConstraint(["submitted_by"], ["sms_users.id"], name="fk_sms_import_batches_submitted_by", ondelete="SET NULL"),
-        ForeignKeyConstraint(["approved_by"], ["sms_users.id"], name="fk_sms_import_batches_approved_by", ondelete="SET NULL"),
-        Index("ix_sms_import_batches_scope_module_status", "tenant_id", "branch_id", "module_code", "status"),
+        UniqueConstraint(
+            "tenant_id", "idempotency_key", name="uq_sms_import_batches_tenant_idempotency"
+        ),
+        CheckConstraint(
+            "status IN ('UPLOADED', 'VALIDATING', 'PREVIEW', 'SUBMITTED', 'COMMITTED', 'REJECTED', 'FAILED')",
+            name="ck_sms_import_batches_status",
+        ),
+        CheckConstraint(
+            "NOT (is_high_risk AND status = 'COMMITTED') OR (approved_by IS NOT NULL AND approved_at IS NOT NULL)",
+            name="ck_sms_import_batches_high_risk_approval",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id"],
+            ["sms_tenants.id"],
+            name="fk_sms_import_batches_tenant",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "branch_id"],
+            ["sms_branches.tenant_id", "sms_branches.id"],
+            name="fk_sms_import_batches_branch_tenant",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["created_by"],
+            ["sms_users.id"],
+            name="fk_sms_import_batches_created_by",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["submitted_by"],
+            ["sms_users.id"],
+            name="fk_sms_import_batches_submitted_by",
+            ondelete="SET NULL",
+        ),
+        ForeignKeyConstraint(
+            ["approved_by"],
+            ["sms_users.id"],
+            name="fk_sms_import_batches_approved_by",
+            ondelete="SET NULL",
+        ),
+        Index(
+            "ix_sms_import_batches_scope_module_status",
+            "tenant_id",
+            "branch_id",
+            "module_code",
+            "status",
+        ),
         Index("ix_sms_import_batches_creator_time", "created_by", "created_at"),
         Index("ix_sms_import_batches_checksum", "tenant_id", "import_type", "checksum"),
     )
@@ -71,6 +112,7 @@ class ImportBatch(Base):
 
 class ImportRow(Base):
     """sms_import_rows table mapping."""
+
     __allow_unmapped__ = True
 
     id: Any
@@ -100,8 +142,21 @@ class ImportRow(Base):
         timestamp("created_at", nullable=False, default_now=True),
         UniqueConstraint("batch_id", "row_number", name="uq_sms_import_rows_batch_row"),
         CheckConstraint("row_number > 0", name="ck_sms_import_rows_row_number"),
-        CheckConstraint("validation_status IN ('VALID', 'WARNING', 'REJECTED')", name="ck_sms_import_rows_validation_status"),
-        ForeignKeyConstraint(["batch_id"], ["sms_import_batches.id"], name="fk_sms_import_rows_batch", ondelete="CASCADE"),
+        CheckConstraint(
+            "validation_status IN ('VALID', 'WARNING', 'REJECTED')",
+            name="ck_sms_import_rows_validation_status",
+        ),
+        ForeignKeyConstraint(
+            ["batch_id"],
+            ["sms_import_batches.id"],
+            name="fk_sms_import_rows_batch",
+            ondelete="CASCADE",
+        ),
         Index("ix_sms_import_rows_batch_validation", "batch_id", "validation_status"),
-        Index("ix_sms_import_rows_target", "target_entity_type", "target_entity_id", postgresql_where=text("target_entity_type IS NOT NULL OR target_entity_id IS NOT NULL")),
+        Index(
+            "ix_sms_import_rows_target",
+            "target_entity_type",
+            "target_entity_id",
+            postgresql_where=text("target_entity_type IS NOT NULL OR target_entity_id IS NOT NULL"),
+        ),
     )

@@ -1,9 +1,9 @@
 """SQLAlchemy models for sms_notification_logs outbox tracking."""
 
-from sqlalchemy import CheckConstraint, ForeignKeyConstraint, Table
+from sqlalchemy import CheckConstraint, Table
+
 from app.shared.models.base import Base
 from app.shared.models.foundation_columns import (
-    date_col,
     jsonb,
     text_col,
     timestamp,
@@ -22,8 +22,10 @@ class NotificationLog(Base):
         uuid_pk(),
         uuid_col("tenant_id", nullable=False),
         uuid_col("branch_id", nullable=True),
-        varchar("event_type", 50, nullable=False), # EXAM_PUBLISHED, MARK_CORRECTION, FEE_RECEIPT, ATTENDANCE_ABSENT
-        varchar("entity_id", 100, nullable=False), # Exam ID, Payment ID, Section ID
+        varchar(
+            "event_type", 50, nullable=False
+        ),  # EXAM_PUBLISHED, MARK_CORRECTION, FEE_RECEIPT, ATTENDANCE_ABSENT
+        varchar("entity_id", 100, nullable=False),  # Exam ID, Payment ID, Section ID
         uuid_col("student_id", nullable=True),
         varchar("recipient_phone", 30, nullable=True),
         varchar("template_name", 100, nullable=False),
