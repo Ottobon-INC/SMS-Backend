@@ -78,7 +78,9 @@ class FeeAccount(Base):
         timestamp("created_at", nullable=False, default_now=True),
         timestamp("updated_at", nullable=False, default_now=True),
         Column("metadata", JSONB, nullable=False, server_default=text("'{}'::jsonb")),
-        UniqueConstraint("tenant_id", "enrollment_id", name="uq_sms_fee_accounts_tenant_enrollment"),
+        UniqueConstraint(
+            "tenant_id", "enrollment_id", name="uq_sms_fee_accounts_tenant_enrollment"
+        ),
         CheckConstraint("currency = 'INR'", name="ck_sms_fee_accounts_currency"),
         CheckConstraint(
             "assigned_fee_amount >= 0 AND scholarship_amount >= 0 AND concession_amount >= 0 "
@@ -94,7 +96,12 @@ class FeeAccount(Base):
             "status IN ('DRAFT', 'ACTIVE', 'PAID', 'PARTIALLY_PAID', 'OVERDUE', 'CLOSED', 'CANCELLED')",
             name="ck_sms_fee_accounts_status",
         ),
-        ForeignKeyConstraint(["tenant_id"], ["sms_tenants.id"], name="fk_sms_fee_accounts_tenant", ondelete="RESTRICT"),
+        ForeignKeyConstraint(
+            ["tenant_id"],
+            ["sms_tenants.id"],
+            name="fk_sms_fee_accounts_tenant",
+            ondelete="RESTRICT",
+        ),
         ForeignKeyConstraint(
             ["tenant_id", "branch_id"],
             ["sms_branches.tenant_id", "sms_branches.id"],
@@ -119,11 +126,33 @@ class FeeAccount(Base):
             name="fk_sms_fee_accounts_academic_year_tenant",
             ondelete="RESTRICT",
         ),
-        ForeignKeyConstraint(["created_by"], ["sms_users.id"], name="fk_sms_fee_accounts_created_by", ondelete="RESTRICT"),
-        ForeignKeyConstraint(["updated_by"], ["sms_users.id"], name="fk_sms_fee_accounts_updated_by", ondelete="SET NULL"),
-        Index("ix_sms_fee_accounts_scope_status", "tenant_id", "branch_id", "academic_year_id", "status"),
+        ForeignKeyConstraint(
+            ["created_by"],
+            ["sms_users.id"],
+            name="fk_sms_fee_accounts_created_by",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["updated_by"],
+            ["sms_users.id"],
+            name="fk_sms_fee_accounts_updated_by",
+            ondelete="SET NULL",
+        ),
+        Index(
+            "ix_sms_fee_accounts_scope_status",
+            "tenant_id",
+            "branch_id",
+            "academic_year_id",
+            "status",
+        ),
         Index("ix_sms_fee_accounts_student", "tenant_id", "student_id"),
-        Index("ix_sms_fee_accounts_outstanding", "tenant_id", "branch_id", "outstanding_amount", postgresql_where=text("outstanding_amount > 0")),
+        Index(
+            "ix_sms_fee_accounts_outstanding",
+            "tenant_id",
+            "branch_id",
+            "outstanding_amount",
+            postgresql_where=text("outstanding_amount > 0"),
+        ),
     )
 
 
@@ -178,9 +207,15 @@ class FeeLedgerEntry(Base):
             "'ADJUSTMENT', 'REVERSAL', 'REFUND', 'LATE_FEE')",
             name="ck_sms_fee_ledger_entries_type",
         ),
-        CheckConstraint("balance_effect IN ('INCREASE', 'DECREASE', 'NEUTRAL')", name="ck_sms_fee_ledger_entries_balance_effect"),
+        CheckConstraint(
+            "balance_effect IN ('INCREASE', 'DECREASE', 'NEUTRAL')",
+            name="ck_sms_fee_ledger_entries_balance_effect",
+        ),
         CheckConstraint("amount > 0", name="ck_sms_fee_ledger_entries_amount_positive"),
-        CheckConstraint("status IN ('DRAFT', 'POSTED', 'REVERSED', 'CANCELLED')", name="ck_sms_fee_ledger_entries_status"),
+        CheckConstraint(
+            "status IN ('DRAFT', 'POSTED', 'REVERSED', 'CANCELLED')",
+            name="ck_sms_fee_ledger_entries_status",
+        ),
         CheckConstraint(
             "payment_mode IS NULL OR payment_mode IN ('CASH', 'UPI', 'BANK_TRANSFER', 'CHEQUE', 'CARD', 'OTHER')",
             name="ck_sms_fee_ledger_entries_payment_mode",
@@ -189,16 +224,32 @@ class FeeLedgerEntry(Base):
             "entry_type <> 'PAYMENT' OR (payment_mode IS NOT NULL AND receipt_number IS NOT NULL AND receipt_date IS NOT NULL)",
             name="ck_sms_fee_ledger_entries_payment_fields",
         ),
-        CheckConstraint("entry_type <> 'REVERSAL' OR reversal_of_entry_id IS NOT NULL", name="ck_sms_fee_ledger_entries_reversal_fields"),
-        CheckConstraint("installment_number IS NULL OR installment_number > 0", name="ck_sms_fee_ledger_entries_installment_number"),
-        ForeignKeyConstraint(["tenant_id"], ["sms_tenants.id"], name="fk_sms_fee_ledger_entries_tenant", ondelete="RESTRICT"),
+        CheckConstraint(
+            "entry_type <> 'REVERSAL' OR reversal_of_entry_id IS NOT NULL",
+            name="ck_sms_fee_ledger_entries_reversal_fields",
+        ),
+        CheckConstraint(
+            "installment_number IS NULL OR installment_number > 0",
+            name="ck_sms_fee_ledger_entries_installment_number",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id"],
+            ["sms_tenants.id"],
+            name="fk_sms_fee_ledger_entries_tenant",
+            ondelete="RESTRICT",
+        ),
         ForeignKeyConstraint(
             ["tenant_id", "branch_id"],
             ["sms_branches.tenant_id", "sms_branches.id"],
             name="fk_sms_fee_ledger_entries_branch_tenant",
             ondelete="RESTRICT",
         ),
-        ForeignKeyConstraint(["fee_account_id"], ["sms_fee_accounts.id"], name="fk_sms_fee_ledger_entries_fee_account", ondelete="RESTRICT"),
+        ForeignKeyConstraint(
+            ["fee_account_id"],
+            ["sms_fee_accounts.id"],
+            name="fk_sms_fee_ledger_entries_fee_account",
+            ondelete="RESTRICT",
+        ),
         ForeignKeyConstraint(
             ["tenant_id", "student_id"],
             ["sms_students.tenant_id", "sms_students.id"],
@@ -223,13 +274,49 @@ class FeeLedgerEntry(Base):
             name="fk_sms_fee_ledger_entries_reversal_of",
             ondelete="RESTRICT",
         ),
-        ForeignKeyConstraint(["collected_by"], ["sms_users.id"], name="fk_sms_fee_ledger_entries_collected_by", ondelete="SET NULL"),
-        ForeignKeyConstraint(["posted_by"], ["sms_users.id"], name="fk_sms_fee_ledger_entries_posted_by", ondelete="RESTRICT"),
-        ForeignKeyConstraint(["created_by"], ["sms_users.id"], name="fk_sms_fee_ledger_entries_created_by", ondelete="RESTRICT"),
-        Index("uq_sms_fee_ledger_entries_receipt", "tenant_id", "branch_id", "receipt_number", unique=True, postgresql_where=text("receipt_number IS NOT NULL")),
-        Index("ix_sms_fee_ledger_entries_account_date", "fee_account_id", "entry_date", "created_at"),
-        Index("ix_sms_fee_ledger_entries_scope_type", "tenant_id", "branch_id", "academic_year_id", "entry_type"),
-        Index("ix_sms_fee_ledger_entries_external_reference", "tenant_id", "branch_id", "external_reference", postgresql_where=text("external_reference IS NOT NULL")),
+        ForeignKeyConstraint(
+            ["collected_by"],
+            ["sms_users.id"],
+            name="fk_sms_fee_ledger_entries_collected_by",
+            ondelete="SET NULL",
+        ),
+        ForeignKeyConstraint(
+            ["posted_by"],
+            ["sms_users.id"],
+            name="fk_sms_fee_ledger_entries_posted_by",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["created_by"],
+            ["sms_users.id"],
+            name="fk_sms_fee_ledger_entries_created_by",
+            ondelete="RESTRICT",
+        ),
+        Index(
+            "uq_sms_fee_ledger_entries_receipt",
+            "tenant_id",
+            "branch_id",
+            "receipt_number",
+            unique=True,
+            postgresql_where=text("receipt_number IS NOT NULL"),
+        ),
+        Index(
+            "ix_sms_fee_ledger_entries_account_date", "fee_account_id", "entry_date", "created_at"
+        ),
+        Index(
+            "ix_sms_fee_ledger_entries_scope_type",
+            "tenant_id",
+            "branch_id",
+            "academic_year_id",
+            "entry_type",
+        ),
+        Index(
+            "ix_sms_fee_ledger_entries_external_reference",
+            "tenant_id",
+            "branch_id",
+            "external_reference",
+            postgresql_where=text("external_reference IS NOT NULL"),
+        ),
     )
 
 
@@ -278,7 +365,10 @@ class FeeAdjustmentRequest(Base):
             name="ck_sms_fee_adjustment_requests_type",
         ),
         CheckConstraint("requested_amount > 0", name="ck_sms_fee_adjustment_requests_amount"),
-        CheckConstraint("status IN ('SUBMITTED', 'APPROVED', 'REJECTED', 'POSTED', 'CANCELLED')", name="ck_sms_fee_adjustment_requests_status"),
+        CheckConstraint(
+            "status IN ('SUBMITTED', 'APPROVED', 'REJECTED', 'POSTED', 'CANCELLED')",
+            name="ck_sms_fee_adjustment_requests_status",
+        ),
         CheckConstraint(
             "status NOT IN ('APPROVED', 'POSTED') OR (approved_by IS NOT NULL AND approved_at IS NOT NULL)",
             name="ck_sms_fee_adjustment_requests_approved_fields",
@@ -287,15 +377,28 @@ class FeeAdjustmentRequest(Base):
             "status <> 'REJECTED' OR (rejected_by IS NOT NULL AND rejected_at IS NOT NULL AND decision_notes IS NOT NULL)",
             name="ck_sms_fee_adjustment_requests_rejected_fields",
         ),
-        CheckConstraint("status <> 'POSTED' OR posted_ledger_entry_id IS NOT NULL", name="ck_sms_fee_adjustment_requests_posted_fields"),
-        ForeignKeyConstraint(["tenant_id"], ["sms_tenants.id"], name="fk_sms_fee_adjustment_requests_tenant", ondelete="RESTRICT"),
+        CheckConstraint(
+            "status <> 'POSTED' OR posted_ledger_entry_id IS NOT NULL",
+            name="ck_sms_fee_adjustment_requests_posted_fields",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id"],
+            ["sms_tenants.id"],
+            name="fk_sms_fee_adjustment_requests_tenant",
+            ondelete="RESTRICT",
+        ),
         ForeignKeyConstraint(
             ["tenant_id", "branch_id"],
             ["sms_branches.tenant_id", "sms_branches.id"],
             name="fk_sms_fee_adjustment_requests_branch_tenant",
             ondelete="RESTRICT",
         ),
-        ForeignKeyConstraint(["fee_account_id"], ["sms_fee_accounts.id"], name="fk_sms_fee_adjustment_requests_fee_account", ondelete="RESTRICT"),
+        ForeignKeyConstraint(
+            ["fee_account_id"],
+            ["sms_fee_accounts.id"],
+            name="fk_sms_fee_adjustment_requests_fee_account",
+            ondelete="RESTRICT",
+        ),
         ForeignKeyConstraint(
             ["tenant_id", "student_id"],
             ["sms_students.tenant_id", "sms_students.id"],
@@ -314,16 +417,37 @@ class FeeAdjustmentRequest(Base):
             name="fk_sms_fee_adjustment_requests_academic_year_tenant",
             ondelete="RESTRICT",
         ),
-        ForeignKeyConstraint(["requested_by"], ["sms_users.id"], name="fk_sms_fee_adjustment_requests_requested_by", ondelete="RESTRICT"),
-        ForeignKeyConstraint(["approved_by"], ["sms_users.id"], name="fk_sms_fee_adjustment_requests_approved_by", ondelete="SET NULL"),
-        ForeignKeyConstraint(["rejected_by"], ["sms_users.id"], name="fk_sms_fee_adjustment_requests_rejected_by", ondelete="SET NULL"),
+        ForeignKeyConstraint(
+            ["requested_by"],
+            ["sms_users.id"],
+            name="fk_sms_fee_adjustment_requests_requested_by",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["approved_by"],
+            ["sms_users.id"],
+            name="fk_sms_fee_adjustment_requests_approved_by",
+            ondelete="SET NULL",
+        ),
+        ForeignKeyConstraint(
+            ["rejected_by"],
+            ["sms_users.id"],
+            name="fk_sms_fee_adjustment_requests_rejected_by",
+            ondelete="SET NULL",
+        ),
         ForeignKeyConstraint(
             ["posted_ledger_entry_id"],
             ["sms_fee_ledger_entries.id"],
             name="fk_sms_fee_adjustment_requests_posted_ledger_entry",
             ondelete="SET NULL",
         ),
-        Index("ix_sms_fee_adjustment_requests_scope_status", "tenant_id", "branch_id", "academic_year_id", "status"),
+        Index(
+            "ix_sms_fee_adjustment_requests_scope_status",
+            "tenant_id",
+            "branch_id",
+            "academic_year_id",
+            "status",
+        ),
         Index("ix_sms_fee_adjustment_requests_account", "fee_account_id", "status"),
         Index("ix_sms_fee_adjustment_requests_requested_by", "requested_by", "requested_at"),
     )

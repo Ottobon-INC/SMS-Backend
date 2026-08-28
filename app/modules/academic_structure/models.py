@@ -1,6 +1,7 @@
 """Academic foundation SQLAlchemy models."""
 
 # mypy: ignore-errors
+
 from typing import Any
 
 from sqlalchemy import CheckConstraint, ForeignKeyConstraint, Index, Table, UniqueConstraint, text
@@ -48,12 +49,34 @@ class AcademicYear(Base):
         timestamp("updated_at", nullable=False, default_now=True),
         UniqueConstraint("tenant_id", "code", name="uq_sms_academic_years_tenant_code"),
         UniqueConstraint("tenant_id", "id", name="uq_sms_academic_years_tenant_id_id"),
-        CheckConstraint("status IN ('DRAFT', 'ACTIVE', 'CLOSED')", name="ck_sms_academic_years_status"),
+        CheckConstraint(
+            "status IN ('DRAFT', 'ACTIVE', 'CLOSED')", name="ck_sms_academic_years_status"
+        ),
         CheckConstraint("ends_on > starts_on", name="ck_sms_academic_years_dates"),
-        ForeignKeyConstraint(["tenant_id"], ["sms_tenants.id"], name="fk_sms_academic_years_tenant", ondelete="RESTRICT"),
-        ForeignKeyConstraint(["created_by"], ["sms_users.id"], name="fk_sms_academic_years_created_by", ondelete="RESTRICT"),
-        ForeignKeyConstraint(["updated_by"], ["sms_users.id"], name="fk_sms_academic_years_updated_by", ondelete="SET NULL"),
-        Index("uq_sms_academic_years_default_active", "tenant_id", unique=True, postgresql_where=text("is_default = true AND status = 'ACTIVE'")),
+        ForeignKeyConstraint(
+            ["tenant_id"],
+            ["sms_tenants.id"],
+            name="fk_sms_academic_years_tenant",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["created_by"],
+            ["sms_users.id"],
+            name="fk_sms_academic_years_created_by",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["updated_by"],
+            ["sms_users.id"],
+            name="fk_sms_academic_years_updated_by",
+            ondelete="SET NULL",
+        ),
+        Index(
+            "uq_sms_academic_years_default_active",
+            "tenant_id",
+            unique=True,
+            postgresql_where=text("is_default = true AND status = 'ACTIVE'"),
+        ),
         Index("ix_sms_academic_years_tenant_status", "tenant_id", "status"),
         Index("ix_sms_academic_years_date_range", "starts_on", "ends_on"),
     )
@@ -85,15 +108,41 @@ class AcademicProgramme(Base):
         uuid_col("updated_by"),
         timestamp("created_at", nullable=False, default_now=True),
         timestamp("updated_at", nullable=False, default_now=True),
-        UniqueConstraint("tenant_id", "programme_code", name="uq_sms_academic_programmes_tenant_code"),
+        UniqueConstraint(
+            "tenant_id", "programme_code", name="uq_sms_academic_programmes_tenant_code"
+        ),
         UniqueConstraint("tenant_id", "id", name="uq_sms_academic_programmes_tenant_id_id"),
-        CheckConstraint("status IN ('ACTIVE', 'INACTIVE')", name="ck_sms_academic_programmes_status"),
-        CheckConstraint("duration_years IS NULL OR duration_years > 0", name="ck_sms_academic_programmes_duration"),
-        ForeignKeyConstraint(["tenant_id"], ["sms_tenants.id"], name="fk_sms_academic_programmes_tenant", ondelete="RESTRICT"),
-        ForeignKeyConstraint(["created_by"], ["sms_users.id"], name="fk_sms_academic_programmes_created_by", ondelete="RESTRICT"),
-        ForeignKeyConstraint(["updated_by"], ["sms_users.id"], name="fk_sms_academic_programmes_updated_by", ondelete="SET NULL"),
+        CheckConstraint(
+            "status IN ('ACTIVE', 'INACTIVE')", name="ck_sms_academic_programmes_status"
+        ),
+        CheckConstraint(
+            "duration_years IS NULL OR duration_years > 0",
+            name="ck_sms_academic_programmes_duration",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id"],
+            ["sms_tenants.id"],
+            name="fk_sms_academic_programmes_tenant",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["created_by"],
+            ["sms_users.id"],
+            name="fk_sms_academic_programmes_created_by",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["updated_by"],
+            ["sms_users.id"],
+            name="fk_sms_academic_programmes_updated_by",
+            ondelete="SET NULL",
+        ),
         Index("ix_sms_academic_programmes_tenant_status", "tenant_id", "status"),
-        Index("ix_sms_academic_programmes_stream", "stream_code", postgresql_where=text("stream_code IS NOT NULL")),
+        Index(
+            "ix_sms_academic_programmes_stream",
+            "stream_code",
+            postgresql_where=text("stream_code IS NOT NULL"),
+        ),
     )
 
 
@@ -127,14 +176,39 @@ class Batch(Base):
         uuid_col("updated_by"),
         timestamp("created_at", nullable=False, default_now=True),
         timestamp("updated_at", nullable=False, default_now=True),
-        UniqueConstraint("tenant_id", "branch_id", "academic_year_id", "batch_code", name="uq_sms_batches_scope_code"),
+        UniqueConstraint(
+            "tenant_id",
+            "branch_id",
+            "academic_year_id",
+            "batch_code",
+            name="uq_sms_batches_scope_code",
+        ),
         UniqueConstraint("tenant_id", "branch_id", "id", name="uq_sms_batches_tenant_branch_id"),
         CheckConstraint("status IN ('ACTIVE', 'INACTIVE', 'CLOSED')", name="ck_sms_batches_status"),
-        ForeignKeyConstraint(["tenant_id", "branch_id"], ["sms_branches.tenant_id", "sms_branches.id"], name="fk_sms_batches_branch_tenant", ondelete="RESTRICT"),
-        ForeignKeyConstraint(["tenant_id", "academic_year_id"], ["sms_academic_years.tenant_id", "sms_academic_years.id"], name="fk_sms_batches_academic_year_tenant", ondelete="RESTRICT"),
-        ForeignKeyConstraint(["tenant_id", "programme_id"], ["sms_academic_programmes.tenant_id", "sms_academic_programmes.id"], name="fk_sms_batches_programme_tenant", ondelete="RESTRICT"),
-        ForeignKeyConstraint(["created_by"], ["sms_users.id"], name="fk_sms_batches_created_by", ondelete="RESTRICT"),
-        ForeignKeyConstraint(["updated_by"], ["sms_users.id"], name="fk_sms_batches_updated_by", ondelete="SET NULL"),
+        ForeignKeyConstraint(
+            ["tenant_id", "branch_id"],
+            ["sms_branches.tenant_id", "sms_branches.id"],
+            name="fk_sms_batches_branch_tenant",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "academic_year_id"],
+            ["sms_academic_years.tenant_id", "sms_academic_years.id"],
+            name="fk_sms_batches_academic_year_tenant",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "programme_id"],
+            ["sms_academic_programmes.tenant_id", "sms_academic_programmes.id"],
+            name="fk_sms_batches_programme_tenant",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["created_by"], ["sms_users.id"], name="fk_sms_batches_created_by", ondelete="RESTRICT"
+        ),
+        ForeignKeyConstraint(
+            ["updated_by"], ["sms_users.id"], name="fk_sms_batches_updated_by", ondelete="SET NULL"
+        ),
         Index("ix_sms_batches_branch_year_status", "branch_id", "academic_year_id", "status"),
         Index("ix_sms_batches_programme", "programme_id"),
     )
@@ -169,12 +243,25 @@ class Section(Base):
         timestamp("updated_at", nullable=False, default_now=True),
         UniqueConstraint("batch_id", "section_code", name="uq_sms_sections_batch_code"),
         UniqueConstraint("tenant_id", "branch_id", "id", name="uq_sms_sections_tenant_branch_id"),
-        UniqueConstraint("tenant_id", "branch_id", "batch_id", "id", name="uq_sms_sections_hierarchy_id"),
-        CheckConstraint("status IN ('ACTIVE', 'INACTIVE', 'CLOSED')", name="ck_sms_sections_status"),
+        UniqueConstraint(
+            "tenant_id", "branch_id", "batch_id", "id", name="uq_sms_sections_hierarchy_id"
+        ),
+        CheckConstraint(
+            "status IN ('ACTIVE', 'INACTIVE', 'CLOSED')", name="ck_sms_sections_status"
+        ),
         CheckConstraint("capacity IS NULL OR capacity >= 0", name="ck_sms_sections_capacity"),
-        ForeignKeyConstraint(["tenant_id", "branch_id", "batch_id"], ["sms_batches.tenant_id", "sms_batches.branch_id", "sms_batches.id"], name="fk_sms_sections_batch_hierarchy", ondelete="RESTRICT"),
-        ForeignKeyConstraint(["created_by"], ["sms_users.id"], name="fk_sms_sections_created_by", ondelete="RESTRICT"),
-        ForeignKeyConstraint(["updated_by"], ["sms_users.id"], name="fk_sms_sections_updated_by", ondelete="SET NULL"),
+        ForeignKeyConstraint(
+            ["tenant_id", "branch_id", "batch_id"],
+            ["sms_batches.tenant_id", "sms_batches.branch_id", "sms_batches.id"],
+            name="fk_sms_sections_batch_hierarchy",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["created_by"], ["sms_users.id"], name="fk_sms_sections_created_by", ondelete="RESTRICT"
+        ),
+        ForeignKeyConstraint(
+            ["updated_by"], ["sms_users.id"], name="fk_sms_sections_updated_by", ondelete="SET NULL"
+        ),
         Index("ix_sms_sections_branch_status", "branch_id", "status"),
         Index("ix_sms_sections_batch", "batch_id"),
     )
@@ -200,9 +287,15 @@ class Subject(Base):
         UniqueConstraint("tenant_id", "subject_code", name="uq_sms_subjects_tenant_code"),
         UniqueConstraint("tenant_id", "id", name="uq_sms_subjects_tenant_id_id"),
         CheckConstraint("status IN ('ACTIVE', 'INACTIVE')", name="ck_sms_subjects_status"),
-        ForeignKeyConstraint(["tenant_id"], ["sms_tenants.id"], name="fk_sms_subjects_tenant", ondelete="RESTRICT"),
-        ForeignKeyConstraint(["created_by"], ["sms_users.id"], name="fk_sms_subjects_created_by", ondelete="RESTRICT"),
-        ForeignKeyConstraint(["updated_by"], ["sms_users.id"], name="fk_sms_subjects_updated_by", ondelete="SET NULL"),
+        ForeignKeyConstraint(
+            ["tenant_id"], ["sms_tenants.id"], name="fk_sms_subjects_tenant", ondelete="RESTRICT"
+        ),
+        ForeignKeyConstraint(
+            ["created_by"], ["sms_users.id"], name="fk_sms_subjects_created_by", ondelete="RESTRICT"
+        ),
+        ForeignKeyConstraint(
+            ["updated_by"], ["sms_users.id"], name="fk_sms_subjects_updated_by", ondelete="SET NULL"
+        ),
         Index("ix_sms_subjects_tenant_status", "tenant_id", "status"),
         Index("ix_sms_subjects_name_lower", "tenant_id", text("lower(subject_name)")),
     )
@@ -227,11 +320,35 @@ class SectionSubject(Base):
         timestamp("created_at", nullable=False, default_now=True),
         timestamp("updated_at", nullable=False, default_now=True),
         CheckConstraint("status IN ('ACTIVE', 'INACTIVE')", name="ck_sms_section_subjects_status"),
-        CheckConstraint("effective_until IS NULL OR effective_from IS NULL OR effective_until >= effective_from", name="ck_sms_section_subjects_effective_dates"),
-        ForeignKeyConstraint(["tenant_id", "branch_id", "section_id"], ["sms_sections.tenant_id", "sms_sections.branch_id", "sms_sections.id"], name="fk_sms_section_subjects_section_hierarchy", ondelete="RESTRICT"),
-        ForeignKeyConstraint(["tenant_id", "subject_id"], ["sms_subjects.tenant_id", "sms_subjects.id"], name="fk_sms_section_subjects_subject_tenant", ondelete="RESTRICT"),
-        ForeignKeyConstraint(["created_by"], ["sms_users.id"], name="fk_sms_section_subjects_created_by", ondelete="RESTRICT"),
-        Index("uq_sms_section_subjects_active", "section_id", "subject_id", unique=True, postgresql_where=text("status = 'ACTIVE' AND effective_until IS NULL")),
+        CheckConstraint(
+            "effective_until IS NULL OR effective_from IS NULL OR effective_until >= effective_from",
+            name="ck_sms_section_subjects_effective_dates",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "branch_id", "section_id"],
+            ["sms_sections.tenant_id", "sms_sections.branch_id", "sms_sections.id"],
+            name="fk_sms_section_subjects_section_hierarchy",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "subject_id"],
+            ["sms_subjects.tenant_id", "sms_subjects.id"],
+            name="fk_sms_section_subjects_subject_tenant",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["created_by"],
+            ["sms_users.id"],
+            name="fk_sms_section_subjects_created_by",
+            ondelete="RESTRICT",
+        ),
+        Index(
+            "uq_sms_section_subjects_active",
+            "section_id",
+            "subject_id",
+            unique=True,
+            postgresql_where=text("status = 'ACTIVE' AND effective_until IS NULL"),
+        ),
         Index("ix_sms_section_subjects_section_status", "section_id", "status"),
         Index("ix_sms_section_subjects_subject_status", "subject_id", "status"),
     )

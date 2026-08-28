@@ -38,11 +38,31 @@ class AuditEvent(Base):
         text_col("outcome", nullable=False),
         uuid_col("correlation_id", nullable=False),
         timestamp("created_at", nullable=False, default_now=True),
-        CheckConstraint("outcome IN ('SUCCEEDED', 'REJECTED', 'DENIED', 'FAILED')", name="ck_sms_audit_events_outcome"),
-        CheckConstraint("branch_id IS NULL OR tenant_id IS NOT NULL", name="ck_sms_audit_events_branch_scope"),
-        ForeignKeyConstraint(["tenant_id"], ["sms_tenants.id"], name="fk_sms_audit_events_tenant", ondelete="RESTRICT"),
-        ForeignKeyConstraint(["tenant_id", "branch_id"], ["sms_branches.tenant_id", "sms_branches.id"], name="fk_sms_audit_events_branch_tenant", ondelete="RESTRICT"),
-        ForeignKeyConstraint(["actor_user_id"], ["sms_users.id"], name="fk_sms_audit_events_actor", ondelete="RESTRICT"),
+        CheckConstraint(
+            "outcome IN ('SUCCEEDED', 'REJECTED', 'DENIED', 'FAILED')",
+            name="ck_sms_audit_events_outcome",
+        ),
+        CheckConstraint(
+            "branch_id IS NULL OR tenant_id IS NOT NULL", name="ck_sms_audit_events_branch_scope"
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id"],
+            ["sms_tenants.id"],
+            name="fk_sms_audit_events_tenant",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "branch_id"],
+            ["sms_branches.tenant_id", "sms_branches.id"],
+            name="fk_sms_audit_events_branch_tenant",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["actor_user_id"],
+            ["sms_users.id"],
+            name="fk_sms_audit_events_actor",
+            ondelete="RESTRICT",
+        ),
         Index("ix_sms_audit_events_scope_time", "tenant_id", "branch_id", text("created_at DESC")),
         Index("ix_sms_audit_events_actor_time", "actor_user_id", text("created_at DESC")),
         Index("ix_sms_audit_events_target", "target_type", "target_id"),
