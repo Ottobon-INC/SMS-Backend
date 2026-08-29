@@ -41,7 +41,7 @@ def _require_tenant_context(context: RequestContext) -> UUID:
 
 
 def _require_tenant_wide_context(context: RequestContext) -> UUID:
-    tenant_id = _require_tenant_wide_context(context)
+    tenant_id = _require_tenant_context(context)
     if context.branch_id is not None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Tenant-wide academic governance scope required.")
     return tenant_id
@@ -537,7 +537,7 @@ def get_academic_sections(
     context: RequestContext = Depends(require_permission(ACADEMIC_STRUCTURE_VIEW)),
     db: Session = Depends(get_db_session),
 ):
-    tenant_id = _require_tenant_wide_context(context)
+    tenant_id = _require_tenant_context(context)
     if context.branch_id is not None and context.branch_id != branch_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized for this branch.")
     rows = db.execute(

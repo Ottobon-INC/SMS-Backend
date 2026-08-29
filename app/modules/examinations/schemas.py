@@ -70,6 +70,7 @@ class ExamRead(ExamBase):
     id: UUID
     tenant_id: UUID
     status: str
+    marks_summary: dict[str, int] | None = None
     return_reason: str | None = None
     published_at: datetime | None = None
     published_by: UUID | None = None

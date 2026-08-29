@@ -112,6 +112,95 @@ class ExaminationsService:
     def get_exam(self, exam_id: UUID, tenant_id: UUID) -> Exam | None:
         return self.repo.get_exam_by_id(exam_id, tenant_id)
 
+    def _attach_marks_summary(self, exam: Exam, tenant_id: UUID, branch_id: UUID | None = None) -> None:
+        branch_ids: list[str] = []
+        if branch_id:
+            branch_ids.append(str(branch_id))
+        elif getattr(exam, "scope", None) == "SINGLE_BRANCH" and getattr(exam, "branch_id", None):
+            branch_ids.append(str(exam.branch_id))
+        elif getattr(exam, "scope", None) == "SELECTED_BRANCHES" and isinstance(getattr(exam, "branch_ids", None), list):
+            branch_ids.extend([str(bid) for bid in exam.branch_ids if bid])
+
+        excluded_branch_ids = [str(bid) for bid in (getattr(exam, "excluded_branch_ids", []) or []) if bid]
+        if getattr(exam, "exemption_reasons", None) and isinstance(exam.exemption_reasons, dict):
+            for exempted_branch_id in exam.exemption_reasons.keys():
+                if exempted_branch_id and str(exempted_branch_id) not in excluded_branch_ids:
+                    excluded_branch_ids.append(str(exempted_branch_id))
+
+        programme_ids: list[str] = []
+        if getattr(exam, "programme_ids", None) and isinstance(exam.programme_ids, list):
+            programme_ids.extend([str(pid).split("-second-year")[0].split("-first-year")[0] for pid in exam.programme_ids if pid])
+        elif getattr(exam, "programme_id", None):
+            programme_ids.append(str(exam.programme_id).split("-second-year")[0].split("-first-year")[0])
+
+        rows = self.repo.db.execute(
+            text("""
+                WITH target_sections AS (
+                    SELECT
+                        s.id AS section_id,
+                        COUNT(DISTINCT e.id) AS student_count
+                    FROM sms_sections s
+                    LEFT JOIN sms_batches b ON b.id = s.batch_id
+                    LEFT JOIN sms_enrollments e ON e.section_id = s.id AND e.status = 'ACTIVE'
+                    WHERE s.tenant_id = :tenant_id
+                      AND s.status = 'ACTIVE'
+                      AND (:has_branch_filter = false OR s.branch_id::text = ANY(CAST(:branch_ids AS text[])))
+                      AND (:has_excluded_filter = false OR s.branch_id::text NOT IN (SELECT unnest(CAST(:excluded_branch_ids AS text[]))))
+                      AND (
+                        :has_programme_filter = false OR
+                        b.id::text = ANY(CAST(:programme_ids AS text[])) OR
+                        b.programme_id::text = ANY(CAST(:programme_ids AS text[]))
+                      )
+                    GROUP BY s.id
+                ),
+                section_statuses AS (
+                    SELECT
+                        ts.section_id,
+                        CASE
+                            WHEN ts.student_count = 0 THEN 'EXEMPTED'
+                            WHEN COUNT(DISTINCT CASE WHEN r.status = 'PUBLISHED' THEN r.student_id END) >= ts.student_count THEN 'PUBLISHED'
+                            WHEN COUNT(DISTINCT CASE WHEN r.status IN ('SUBMITTED', 'PUBLISHED') THEN r.student_id END) >= ts.student_count THEN 'SUBMITTED'
+                            WHEN COUNT(r.id) > 0 THEN 'DRAFT'
+                            ELSE 'PENDING'
+                        END AS marks_status
+                    FROM target_sections ts
+                    LEFT JOIN sms_student_exam_records r
+                        ON r.section_id = ts.section_id
+                       AND r.exam_id = :exam_id
+                    GROUP BY ts.section_id, ts.student_count
+                )
+                SELECT marks_status, COUNT(*) AS count
+                FROM section_statuses
+                GROUP BY marks_status
+            """),
+            {
+                "tenant_id": tenant_id,
+                "exam_id": exam.id,
+                "has_branch_filter": len(branch_ids) > 0,
+                "branch_ids": branch_ids if branch_ids else [""],
+                "has_excluded_filter": len(excluded_branch_ids) > 0,
+                "excluded_branch_ids": excluded_branch_ids if excluded_branch_ids else [""],
+                "has_programme_filter": len(programme_ids) > 0,
+                "programme_ids": programme_ids if programme_ids else [""],
+            },
+        ).fetchall()
+
+        summary = {
+            "pending": 0,
+            "draft": 0,
+            "submitted": 0,
+            "published": 0,
+            "exempted": 0,
+            "total": 0,
+        }
+        for row in rows:
+            key = str(row.marks_status or "PENDING").lower()
+            if key in summary:
+                summary[key] = int(row.count or 0)
+            summary["total"] += int(row.count or 0)
+
+        setattr(exam, "marks_summary", summary)
+
     def list_exams(
         self,
         tenant_id: UUID,
@@ -204,6 +293,9 @@ class ExaminationsService:
                     )
                     self.repo.db.commit()
 
+
+        for exam in exams:
+            self._attach_marks_summary(exam, tenant_id, branch_id)
 
         return exams
 
